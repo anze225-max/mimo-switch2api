@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MiMo Switch</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 28px; background: #14161a; color: #e6e8ec;
+         font: 14px/1.6 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; }
+  h1 { font-size: 19px; margin: 0 0 4px; font-weight: 600; }
+  .sub { color: #8b93a1; margin-bottom: 22px; font-size: 13px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr)); gap: 12px; margin-bottom: 18px; }
+  .card { background: #1b1e24; border: 1px solid #262a32; border-radius: 10px; padding: 14px 16px; }
+  .k { color: #8b93a1; font-size: 12px; letter-spacing: .04em; }
+  .v { font-size: 17px; font-weight: 600; margin-top: 3px; word-break: break-all; }
+  .ok { color: #5fd39a; } .warn { color: #f0b45c; } .bad { color: #f0776b; }
+  section { background: #1b1e24; border: 1px solid #262a32; border-radius: 10px; padding: 16px; margin-bottom: 14px; }
+  section h2 { font-size: 13px; margin: 0 0 10px; color: #aab2c0; font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #262a32; }
+  th { color: #8b93a1; font-weight: 500; font-size: 12px; }
+  code, pre { font-family: "Cascadia Mono", Consolas, monospace; font-size: 12.5px; }
+  pre { background: #101215; border: 1px solid #262a32; border-radius: 8px; padding: 11px 13px; overflow-x: auto; margin: 0 0 10px; }
+  button { background: #2b6cb0; color: #fff; border: 0; border-radius: 6px; padding: 5px 11px;
+           cursor: pointer; font-size: 12px; }
+  button:hover { background: #3182ce; }
+  .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .note { color: #8b93a1; font-size: 12px; }
+</style>
+</head>
+<body>
+  <h1>MiMo Switch</h1>
+  <div class="sub">把 MiMo 桌面端的免费额度暴露成本地 OpenAI / Anthropic / Responses 端点</div>
+
+  <div class="grid">
+    <div class="card"><div class="k">状态</div><div class="v" id="status">…</div></div>
+    <div class="card"><div class="k">额度来源</div><div class="v" id="plan">…</div></div>
+    <div class="card"><div class="k">上游</div><div class="v" id="upstream" style="font-size:13px">…</div></div>
+    <div class="card"><div class="k">已用额度单位</div><div class="v" id="units">…</div><div class="note">按倍率折算</div></div>
+  </div>
+
+  <section>
+    <div class="row">
+      <h2>用量（来自上游返回的真实 token，非估算）</h2>
+      <button onclick="load()">刷新</button>
+    </div>
+    <table id="usage"><tr><th>模型</th><th>请求</th><th>倍率</th><th>额度单位(k tokens×倍率)</th></tr></table>
+    <div class="note" id="totals"></div>
+  </section>
+
+  <section>
+    <h2>接入配置</h2>
+    <div class="k">本地端点</div>
+    <pre id="base"></pre>
+    <div class="k">本地访问令牌（仅本机）</div>
+    <pre id="token"></pre>
+    <div class="k">Claude Code</div>
+    <pre id="claude"></pre>
+    <div class="k">Codex CLI（~/.codex/config.toml）</div>
+    <pre id="codex"></pre>
+    <div class="k">Cursor / Cline / 其他 OpenAI 兼容工具</div>
+    <pre id="openai"></pre>
+  </section>
+
+  <section>
+    <h2>可用模型</h2>
+    <table id="models"><tr><th>模型 ID</th><th>倍率</th></tr></table>
+    <div class="note" id="hint"></div>
+  </section>
+
+<script>
+function fmt(n){ return (Math.round(n*1000)/1000).toLocaleString('zh-CN'); }
+function put(id, text, cls){ const e = document.getElementById(id); e.textContent = text; if(cls) e.className = 'v '+cls; }
+
+async function load(){
+  const r = await fetch('/api/status'); const s = await r.json();
+  put('status', s.healthy ? '运行中' : '异常', s.healthy ? 'ok' : 'bad');
+  put('plan', s.plan_label || s.plan);
+  put('upstream', s.upstream);
+  put('units', fmt(s.usage.weighted_units));
+
+  const base = 'http://' + s.listen + '/v1';
+  put('base', base); put('token', s.require_token ? s.local_token : '（未启用本地令牌）');
+  put('claude', [
+    'set ANTHROPIC_BASE_URL=' + base,
+    'set ANTHROPIC_API_KEY=' + s.local_token,
+    'set ANTHROPIC_MODEL=' + s.model,
+    'claude'
+  ].join('\n'));
+  put('codex', [
+    '[model_providers.mimo]',
+    'name = "MiMo 桌面端免费额度"',
+    'base_url = "' + base + '"',
+    'env_key = "MIMO_LOCAL_TOKEN"',
+    'wire_api = "responses"',
+    '',
+    'set MIMO_LOCAL_TOKEN=' + s.local_token,
+    'codex --model ' + s.model + ' --model-provider mimo'
+  ].join('\n'));
+  put('openai', [
+    'OPENAI_BASE_URL=' + base,
+    'OPENAI_API_KEY=' + s.local_token,
+    'model=' + s.model
+  ].join('\n'));
+
+  const t = document.querySelector('#usage');
+  t.innerHTML = '<tr><th>模型</th><th>请求</th><th>倍率</th><th>额度单位(k tokens×倍率)</th></tr>';
+  (s.usage.by_model || []).forEach(m => {
+    t.innerHTML += '<tr><td><code>' + m.model + '</code></td><td>' + m.requests +
+                   '</td><td>' + m.multiplier + 'x</td><td>' + fmt(m.units) + '</td></tr>';
+  });
+  put('totals', '共 ' + s.usage.requests + ' 次请求（失败 ' + s.usage.failed + '）· 输入 ' +
+      s.usage.prompt_tokens.toLocaleString('zh-CN') + ' / 输出 ' +
+      s.usage.completion_tokens.toLocaleString('zh-CN') + ' tokens');
+
+  const mt = document.querySelector('#models');
+  mt.innerHTML = '<tr><th>模型 ID</th><th>倍率</th></tr>';
+  (s.models || []).forEach(m => {
+    mt.innerHTML += '<tr><td><code>' + m.id + '</code></td><td>' + m.multiplier + 'x</td></tr>';
+  });
+  put('hint', s.desktop ? 'Flash 只耗 0.4 倍额度，日常任务建议把模型设为 mimo-x-flash-preview 以省额度。' : '');
+}
+load(); setInterval(load, 4000);
+</script>
+</body>
+</html>
