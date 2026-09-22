@@ -131,7 +131,7 @@ func (t *Tracker) Record(model string, promptTokens, completionTokens int, faile
 
 	entry, ok := t.perModel[model]
 	if !ok {
-		entry = &ByModel{Model: model, Multiplier: ratio}
+		entry = &ByModel{Model: model}
 		t.perModel[model] = entry
 	}
 	entry.Requests++
@@ -143,8 +143,19 @@ func (t *Tracker) Snapshot() Snapshot {
 	defer t.mu.Unlock()
 	var models []ByModel
 	for _, e := range t.perModel {
-		models = append(models, *e)
+		row := *e
+		// Look the rate up now rather than storing it at first sight: a MiMo ratio change
+		// would otherwise keep showing the stale multiplier next to freshly weighted units.
+		row.Multiplier = t.multiplierFor(e.Model)
+		models = append(models, row)
 	}
+	// Map iteration is random; the panel redraws every few seconds and must not shuffle.
+	sort.Slice(models, func(i, j int) bool {
+		if models[i].Units != models[j].Units {
+			return models[i].Units > models[j].Units
+		}
+		return models[i].Model < models[j].Model
+	})
 	return Snapshot{
 		Requests: t.requests, Failed: t.failed,
 		PromptTokens: t.in, CompletionToken: t.out,

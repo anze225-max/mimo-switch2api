@@ -86,6 +86,9 @@ func (c *Conn) read() {
 		}
 		c.mu.Lock()
 		ch, ok := c.waiter[msg.ID]
+		if ok {
+			delete(c.waiter, msg.ID) // replies must not accumulate waiters either
+		}
 		c.mu.Unlock()
 		if !ok {
 			continue
@@ -117,6 +120,11 @@ func (c *Conn) Call(method string, params map[string]any) (json.RawMessage, erro
 	case raw := <-ch:
 		return raw, nil
 	case <-time.After(20 * time.Second):
+		// Without this the waiter channel stays registered forever, so every timed-out
+		// call leaks an entry on a connection that may run for hours.
+		c.mu.Lock()
+		delete(c.waiter, id)
+		c.mu.Unlock()
 		return nil, fmt.Errorf("%s 超时", method)
 	}
 }

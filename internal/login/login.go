@@ -19,9 +19,10 @@ import (
 	"mimo-switch/internal/desktopauth"
 )
 
-// loginURL is the address MiMo's own sign-in window loads. With no session it renders
+// loginURL is the address MiMo's own sign-in window loads (sid=passport is what its
+// WebView uses). With no session it renders
 // passport's login page; completing that page puts passToken on .xiaomi.com.
-const loginURL = "https://account.xiaomi.com/pass/serviceLogin?sid=mimopc&_locale=zh_CN"
+const loginURL = "https://account.xiaomi.com/pass/serviceLogin?sid=passport"
 
 // DefaultTimeout is generous: signing in usually means fumbling for a phone to scan a QR.
 const DefaultTimeout = 5 * time.Minute

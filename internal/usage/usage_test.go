@@ -86,3 +86,33 @@ func TestPreferredModelAvoidsTheMostExpensive(t *testing.T) {
 		t.Errorf("empty catalogue = %q, want empty", got)
 	}
 }
+
+// A repricing by MiMo must not leave the panel showing the rate captured at first sight.
+func TestSnapshotShowsTheLiveMultiplier(t *testing.T) {
+	tr := NewTracker([]CatalogModel{{ID: "mimo-v2.6-pro", Ratio: 1.0}})
+	tr.Record("mimo-v2.6-pro", 1000, 0, false)
+	if got := tr.Snapshot().ByModel[0].Multiplier; got != 1.0 {
+		t.Fatalf("multiplier = %v, want 1.0", got)
+	}
+	tr.SetMultipliers([]CatalogModel{{ID: "mimo-v2.6-pro", Ratio: 2.5}})
+	if got := tr.Snapshot().ByModel[0].Multiplier; got != 2.5 {
+		t.Errorf("multiplier = %v, want the live 2.5", got)
+	}
+}
+
+// Rows come out of a map; the panel redraws every few seconds and must not reshuffle.
+func TestSnapshotOrdersModelsDeterministically(t *testing.T) {
+	tr := NewTracker(v26Catalog())
+	tr.Record("mimo-v2.6-pro", 5000, 0, false)           // 5 units
+	tr.Record("mimo-v2.6-flash", 1000, 0, false)         // 0.4 units
+	tr.Record("mimo-v2.6-pro-ultraspeed", 100, 0, false) // 1 unit
+	want := []string{"mimo-v2.6-pro", "mimo-v2.6-pro-ultraspeed", "mimo-v2.6-flash"}
+	for i := 0; i < 20; i++ {
+		rows := tr.Snapshot().ByModel
+		for j, name := range want {
+			if rows[j].Model != name {
+				t.Fatalf("row %d = %s, want %s (iteration order leaked)", j, rows[j].Model, name)
+			}
+		}
+	}
+}

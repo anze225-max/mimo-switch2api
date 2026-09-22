@@ -267,21 +267,25 @@ func cmdHarvest(args []string) error {
 		session = s
 		fmt.Println("已读取导出文件。")
 	case *launch:
+		debugPort := *port
+		if debugPort == 0 {
+			debugPort = 9229
+		}
 		if !desktopauth.Running() {
-			if err := desktopauth.LaunchMiMo(*exe, 9229); err != nil {
+			if err := desktopauth.LaunchMiMo(*exe, debugPort); err != nil {
 				return err
 			}
 			fmt.Println("已启动 MiMo，请在其窗口里用小米账号登录。")
 		} else {
 			fmt.Println("MiMo 已在运行；若它不是以调试端口启动的，请先完全退出再试 --launch。")
 		}
-		if err := desktopauth.WaitReady(9229, 90*time.Second); err != nil {
+		if err := desktopauth.WaitReady(debugPort, 90*time.Second); err != nil {
 			return err
 		}
 		fmt.Println("等待你在 MiMo 窗口中完成登录…（最多 5 分钟）")
 		deadline := time.Now().Add(5 * time.Minute)
 		for {
-			s, _, err := desktopauth.HarvestLive(9229)
+			s, _, err := desktopauth.HarvestLive(debugPort)
 			if err == nil {
 				session = s
 				break
