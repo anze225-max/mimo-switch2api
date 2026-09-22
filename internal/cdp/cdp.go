@@ -36,7 +36,7 @@ func Connect(port int) (*Conn, error) {
 	client := &http.Client{Timeout: 3 * time.Second}
 	res, err := client.Get(url)
 	if err != nil {
-		return nil, fmt.Errorf("调试端口 %d 不可达（MiMo 是否在运行？）: %w", port, err)
+		return nil, fmt.Errorf("调试端口 %d 不可达（目标进程是否以调试端口启动？）: %w", port, err)
 	}
 	defer res.Body.Close()
 	var targets []target

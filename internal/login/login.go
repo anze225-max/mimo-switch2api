@@ -19,10 +19,11 @@ import (
 	"mimo-switch/internal/desktopauth"
 )
 
-// loginURL is the address MiMo's own sign-in window loads (sid=passport is what its
-// WebView uses). With no session it renders
-// passport's login page; completing that page puts passToken on .xiaomi.com.
-const loginURL = "https://account.xiaomi.com/pass/serviceLogin?sid=passport"
+// loginURL asks passport for a MiMo-desktop session directly. MiMo's own jar keeps its
+// serviceToken on .mimo-server-cn.xiaomimimo.com, so the redirect chain started from here can
+// leave us that token outright; asking for the passport sid instead yields a token for the
+// wrong service and the later exchange then fails with 70016.
+const loginURL = "https://account.xiaomi.com/pass/serviceLogin?sid=mimopc&_locale=zh_CN"
 
 // DefaultTimeout is generous: signing in usually means fumbling for a phone to scan a QR.
 const DefaultTimeout = 5 * time.Minute
@@ -84,23 +85,40 @@ func Start() (*Session, error) {
 	return s, nil
 }
 
-// Wait blocks until the window holds a passport session, then mints the desktop
-// serviceToken from it. The returned session still needs verifying against the catalogue.
+// windowSession is what the sign-in window holds once the redirect chain has run.
+//
+// MiMo's own cookie jar keeps the serviceToken on .mimo-server-cn.xiaomimimo.com, so when
+// the login page completes that redirect the token is already in the window and no passport
+// exchange is needed. The exchange is only the fallback.
+type windowSession struct {
+	ServiceToken string
+	Master       desktopauth.MasterCredential
+}
+
+// Wait blocks until the window holds a passport session, then returns a desktop session.
 func (s *Session) Wait(ctx context.Context) (*desktopauth.Session, error) {
 	var lastErr error
 	for {
-		master, err := s.masterCredential()
+		win, err := s.windowSession()
 		switch {
 		case errors.Is(err, ErrWindowClosed):
 			return nil, err
 		case err != nil:
 			lastErr = err
-		case master.PassToken != "" && master.UserID != "":
-			session, err := desktopauth.Refresh(*master)
+		case win.ServiceToken != "":
+			return &desktopauth.Session{
+				ServiceToken: win.ServiceToken,
+				UserID:       win.Master.UserID,
+				CUserId:      win.Master.CUserId,
+				PassToken:    win.Master.PassToken,
+				HarvestedAt:  time.Now().UTC(),
+			}, nil
+		case win.Master.PassToken != "" && win.Master.UserID != "":
+			session, err := desktopauth.Refresh(win.Master)
 			if err != nil {
 				// The cookie names (never values) are what distinguishes "logged in" from
-				// "logged in with the wrong passport context", so report them.
-				return nil, fmt.Errorf("%w（窗口里的 Cookie：%s）", err, jarNames(master.SessionCookies))
+				// "logged in against the wrong service", so report them.
+				return nil, fmt.Errorf("%w（窗口里的 Cookie：%s）", err, jarNames(win.Master.SessionCookies))
 			}
 			return session, nil
 		default:
@@ -131,7 +149,7 @@ func (s *Session) Close() error {
 	return removeProfile(s.profile)
 }
 
-func (s *Session) masterCredential() (*desktopauth.MasterCredential, error) {
+func (s *Session) windowSession() (*windowSession, error) {
 	select {
 	case <-s.exited:
 		return nil, ErrWindowClosed
@@ -141,21 +159,23 @@ func (s *Session) masterCredential() (*desktopauth.MasterCredential, error) {
 	if err != nil {
 		return nil, err
 	}
-	return parsePassportCookies(raw)
+	return parseWindowCookies(raw)
 }
 
-// parsePassportCookies reads the three names we need out of a Network.getCookies reply.
-func parsePassportCookies(raw json.RawMessage) (*desktopauth.MasterCredential, error) {
+// parseWindowCookies reads what the sign-in window ended up with. Only the serviceToken
+// served to MiMo's own host counts; a passport-scoped one is a different service's ticket.
+func parseWindowCookies(raw json.RawMessage) (*windowSession, error) {
 	var reply struct {
 		Cookies []struct {
-			Name  string `json:"name"`
-			Value string `json:"value"`
+			Name   string `json:"name"`
+			Value  string `json:"value"`
+			Domain string `json:"domain"`
 		} `json:"cookies"`
 	}
 	if err := json.Unmarshal(raw, &reply); err != nil {
 		return nil, fmt.Errorf("解析登录窗口的 Cookie: %w", err)
 	}
-	master := &desktopauth.MasterCredential{SID: desktopauth.DefaultSID}
+	win := &windowSession{Master: desktopauth.MasterCredential{SID: desktopauth.DefaultSID}}
 	jar := map[string]string{}
 	for _, c := range reply.Cookies {
 		v := strings.TrimSpace(c.Value)
@@ -165,14 +185,18 @@ func parsePassportCookies(raw json.RawMessage) (*desktopauth.MasterCredential, e
 		jar[c.Name] = v // the window's latest value for a name wins
 		switch c.Name {
 		case "passToken":
-			master.PassToken = v
+			win.Master.PassToken = v
 		case "userId":
-			if master.UserID == "" {
-				master.UserID = v
+			if win.Master.UserID == "" {
+				win.Master.UserID = v
 			}
 		case "cUserId":
-			if master.CUserId == "" {
-				master.CUserId = v
+			if win.Master.CUserId == "" {
+				win.Master.CUserId = v
+			}
+		case "serviceToken":
+			if strings.Contains(c.Domain, "mimo-server") {
+				win.ServiceToken = v
 			}
 		}
 	}
@@ -181,8 +205,8 @@ func parsePassportCookies(raw json.RawMessage) (*desktopauth.MasterCredential, e
 		parts = append(parts, name+"="+v)
 	}
 	sort.Strings(parts)
-	master.SessionCookies = strings.Join(parts, "; ")
-	return master, nil
+	win.Master.SessionCookies = strings.Join(parts, "; ")
+	return win, nil
 }
 
 // removeProfile retries: the renderers we just killed can hold the directory for a moment,
