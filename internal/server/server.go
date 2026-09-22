@@ -63,6 +63,14 @@ type Server struct {
 
 	// loginBusy guards the login window so the tray and the panel cannot open two at once.
 	loginBusy atomic.Bool
+
+	// setMu guards the runtime-adjustable settings and the listener recovery counter, so
+	// the panel can change them while the tray and the keepalive loop are reading them.
+	setMu       sync.Mutex
+	keepMinutes int
+	autoRestart bool
+	recovered   int64
+	shutdownFn  func()
 }
 
 // quotaTTL bounds how often the panel can refresh the allowance from MiMo.
@@ -91,6 +99,8 @@ func New(cfg *store.Config) (*Server, error) {
 		listen:       cfg.Listen,
 		localToken:   cfg.LocalToken,
 		requireToken: cfg.RequireToken,
+		keepMinutes:  cfg.KeepaliveMinutes,
+		autoRestart:  cfg.AutoRestart(),
 		tracker:      usage.NewTracker(models),
 		startedAt:    time.Now(),
 		modelList:    models,
@@ -182,6 +192,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /", s.handlePanel)
 	mux.HandleFunc("GET /api/status", s.handleStatus)
 	mux.HandleFunc("POST /api/login", s.guard(s.handleLogin))
+	mux.HandleFunc("POST /api/settings", s.guard(s.handleSettings))
+	mux.HandleFunc("POST /api/autostart", s.guard(s.handleAutostart))
+	mux.HandleFunc("POST /api/shutdown", s.guard(s.handleShutdown))
 	mux.HandleFunc("GET /v1/models", s.guard(s.handleModels))
 	mux.HandleFunc("GET /models", s.guard(s.handleModels))
 	mux.HandleFunc("POST /v1/chat/completions", s.guard(s.handleChat))
@@ -200,6 +213,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		<-ctx.Done()
 		_ = httpServer.Close()
 	}()
+	go s.keepaliveLoop(ctx)
 	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}

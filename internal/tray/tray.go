@@ -57,6 +57,36 @@ func redirectLogsToFile() (string, error) {
 	return path, nil
 }
 
+// serveForever keeps the endpoint listening. A listener that dies — port stolen, transient
+// bind failure — is retried with backoff instead of taking the whole app down; the fatal
+// channel is only used when the user switched auto-restart off.
+func serveForever(ctx context.Context, srv *server.Server, fatal chan<- error) {
+	delay := time.Second
+	for {
+		started := time.Now()
+		err := srv.ListenAndServe(ctx)
+		if ctx.Err() != nil {
+			return // we were asked to stop
+		}
+		if !srv.AutoRestart() {
+			fatal <- err
+			return
+		}
+		srv.NoteRecovery(err)
+		if time.Since(started) > 10*time.Minute {
+			delay = time.Second // it ran long enough to count as healthy
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(delay):
+		}
+		if delay < 30*time.Second {
+			delay *= 3
+		}
+	}
+}
+
 // Run starts the proxy and blocks in the status-area loop.
 func Run() error {
 	DetachConsole()
@@ -75,8 +105,14 @@ func Run() error {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	// The uninstaller stops us over loopback before it deletes anything, so the exit has to
+	// reach both the listener and the status-area loop.
+	srv.SetShutdown(func() {
+		cancel()
+		systray.Quit()
+	})
 	serverErr := make(chan error, 1)
-	go func() { serverErr <- srv.ListenAndServe(ctx) }()
+	go serveForever(ctx, srv, serverErr)
 	time.Sleep(300 * time.Millisecond)
 	select {
 	case err := <-serverErr:

@@ -12,7 +12,7 @@ rm -rf dist "$out"
 mkdir -p "$out"
 
 go build -trimpath -ldflags "-H=windowsgui -s -w" -o "$out/MiMoSwitch.exe" ./cmd/switch
-cp tools/install.ps1 "tools/使用说明.md" "$out/"
+cp "tools/使用说明.md" "$out/"
 
 # Windows 自带 Compress-Archive，不依赖 zip.exe。
 powershell -NoProfile -ExecutionPolicy Bypass -Command \

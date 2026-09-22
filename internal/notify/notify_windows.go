@@ -22,6 +22,22 @@ func messageBox(title, text string) {
 	)
 }
 
+// Confirm asks a yes/no question and reports whether the answer was 是. A text prompt would
+// be invisible in a double-clicked build, and destructive actions still need a human.
+func Confirm(title, text string) bool {
+	// MB_YESNO | MB_ICONQUESTION | MB_TOPMOST; MessageBoxW returns IDYES for 6.
+	ret, _, _ := syscall.NewLazyDLL("user32.dll").NewProc("MessageBoxW").Call(
+		0,
+		uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr(text))),
+		uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr(title))),
+		uintptr(0x00000004|0x00000020|0x00040000),
+	)
+	return ret == 6
+}
+
+// Info reports a finished action to someone who cannot see stderr.
+func Info(title, text string) { messageBox(title, text) }
+
 // Error reports a failed start-up to someone who cannot see stderr.
 func Error(title string, err error) {
 	if err == nil {

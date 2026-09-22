@@ -60,6 +60,8 @@ func newTestServer(baseURL string, cred *store.Credential, relogin relogin) *Ser
 		cred:   cred,
 		// cfg stays nil so a renewal cannot touch the real on-disk config; desktopBase
 		// keeps an adopted session pointed at the test server instead of at MiMo.
+		// Mirror the production default so keepalive behaves the same here.
+		keepMinutes: store.DefaultKeepaliveMinutes,
 		desktopBase: baseURL,
 		tracker:     usage.NewTracker(nil),
 		relogin:     relogin,

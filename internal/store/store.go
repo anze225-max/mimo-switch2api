@@ -54,8 +54,15 @@ func (c *Credential) Plan() string {
 
 type Config struct {
 	Listen       string `json:"listen"`
-	LocalToken   string ` json:"local_token"`
+	LocalToken   string `json:"local_token"`
 	RequireToken bool   `json:"require_token"`
+
+	// KeepaliveMinutes is how often the desktop session is renewed on a timer instead of
+	// waiting for a 401. Zero turns the timer off.
+	KeepaliveMinutes int `json:"keepalive_minutes"`
+	// RestartOnCrash keeps the listener alive when it dies. nil means the default, on,
+	// so a config written before this option existed keeps behaving the same.
+	RestartOnCrash *bool `json:"restart_on_crash,omitempty"`
 
 	// ModelAliases maps a client's model label (e.g. "sol") onto a real MiMo model id.
 	// Empty means use the built-in defaults.
@@ -120,7 +127,7 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	cfg := &Config{Listen: "127.0.0.1:7864", RequireToken: true}
+	cfg := &Config{Listen: "127.0.0.1:7864", RequireToken: true, KeepaliveMinutes: DefaultKeepaliveMinutes}
 	raw, err := os.ReadFile(p)
 	switch {
 	case os.IsNotExist(err):
@@ -212,4 +219,20 @@ func randomToken() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b[:]), nil
+}
+
+// DefaultKeepaliveMinutes renews the desktop session on a timer, well inside the
+// serviceToken lifetime, so client requests almost never hit a 401 in the first place.
+const DefaultKeepaliveMinutes = 360
+
+// AutoRestart reports whether the listener should be retried after it dies. A config from
+// before this option existed (nil) keeps the default, on.
+func (c *Config) AutoRestart() bool { return c.RestartOnCrash == nil || *c.RestartOnCrash }
+
+// Keepalive returns the renewal interval, or false when the timer is switched off.
+func (c *Config) Keepalive() (time.Duration, bool) {
+	if c.KeepaliveMinutes <= 0 {
+		return 0, false
+	}
+	return time.Duration(c.KeepaliveMinutes) * time.Minute, true
 }

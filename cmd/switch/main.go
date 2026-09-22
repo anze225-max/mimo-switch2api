@@ -7,12 +7,15 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
+	"strings"
 	"time"
 
 	"mimo-switch/internal/auth"
 	"mimo-switch/internal/autostart"
 	"mimo-switch/internal/desktopauth"
+	"mimo-switch/internal/install"
 	"mimo-switch/internal/login"
 	"mimo-switch/internal/notify"
 	"mimo-switch/internal/server"
@@ -27,7 +30,7 @@ func main() {
 	flag.Parse()
 	if err := run(flag.Args()); err != nil {
 		fmt.Fprintln(os.Stderr, "错误:", err)
-		if !hasConsole() {
+		if isInstalledBuild() {
 			// A double-clicked GUI build has no console, so stderr alone would be invisible.
 			notify.Error("MiMo Switch 启动失败", err)
 		}
@@ -35,9 +38,13 @@ func main() {
 	}
 }
 
-// hasConsole reports whether the process inherited a terminal, i.e. it was started from one
-// rather than by double-clicking the icon.
-func hasConsole() bool { return !tray.StartedWithoutConsole() }
+// isInstalledBuild reports whether this is the distributable GUI binary, the only one that
+// should ever speak through a dialog box. A console build may run without a Windows console
+// (Git Bash hands out a pseudo-terminal), so testing for a console misclassifies it.
+func isInstalledBuild() bool {
+	exe, err := os.Executable()
+	return err == nil && install.IsDistributable(exe)
+}
 
 func printUsage() {
 	fmt.Fprint(os.Stderr, `mimo-switch — 把 MiMo 免费额度暴露成本地 OpenAI/Anthropic 端点
@@ -48,6 +55,7 @@ func printUsage() {
   mimo-switch serve                启动本地反代
   mimo-switch tray                 后台运行 + 托盘图标（静默，无控制台）
   mimo-switch autostart on|off     开机静默自启
+  mimo-switch uninstall            一键卸载：删自启项、快捷方式、程序目录与配置（--keep-config 保留凭证）
   mimo-switch status               查看已保存的凭证（掩码显示）
   mimo-switch models               用当前凭证拉取上游模型列表，验证可用
   mimo-switch probe [model]        发一条最小补全，验证端到端
@@ -62,7 +70,7 @@ func printUsage() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		if !hasConsole() {
+		if isInstalledBuild() {
 			return cmdTray() // double-clicked: go straight to the silent tray app
 		}
 		printUsage()
@@ -89,6 +97,8 @@ func run(args []string) error {
 		return cmdTray()
 	case "autostart":
 		return cmdAutostart(args[1:])
+	case "uninstall":
+		return cmdUninstall(args[1:])
 	default:
 		printUsage()
 		return fmt.Errorf("未知子命令 %q", args[0])
@@ -330,6 +340,12 @@ func cmdHarvest(args []string) error {
 // cmdTray is what a double-click gives you. If an instance already serves the port, open
 // its panel instead of failing to bind; otherwise sign in when needed and run the tray.
 func cmdTray() error {
+	if err := relocate(); err != nil {
+		return err
+	}
+	if err := ensureRegistered(); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+	}
 	cfg, err := store.Load()
 	if err != nil {
 		return err
@@ -343,6 +359,130 @@ func cmdTray() error {
 		return err
 	}
 	return tray.Run()
+}
+
+// relocate moves the distributable into %LOCALAPPDATA%\MiMoSwitch and hands over to that
+// copy, so the logon entry and shortcuts point at a path that survives the download folder
+// being cleaned out. Failing to move is never fatal: it just runs where it was.
+func relocate() error {
+	exe, err := install.Relocate()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "自我安置失败，就地运行: %v\n", err)
+		return nil
+	}
+	if exe == "" {
+		return nil
+	}
+	fmt.Println("已安置到", exe, "，改由该位置继续运行。")
+	child := exec.Command(exe, os.Args[1:]...)
+	if err := child.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "从新位置启动失败，就地继续运行: %v\n", err)
+		return nil
+	}
+	os.Exit(0)
+	return nil
+}
+
+// ensureRegistered keeps the logon entry and the shortcuts pointed at wherever this copy
+// actually lives. It only writes when something differs, so a normal launch costs a
+// registry read.
+func ensureRegistered() error {
+	exe, err := os.Executable()
+	if err != nil || !install.IsDistributable(exe) {
+		return err
+	}
+	if on, command, err := autostart.Enabled(); err == nil && on && strings.Contains(command, exe) {
+		return nil
+	}
+	return registerStartup()
+}
+
+// registerStartup points the logon entry at the installed copy and adds the Start Menu
+// entries, including the one-click uninstaller.
+func registerStartup() error {
+	if err := autostart.Enable(); err != nil {
+		return fmt.Errorf("注册开机自启失败: %w", err)
+	}
+	if err := install.StartMenu(); err != nil {
+		return fmt.Errorf("创建开始菜单快捷方式失败: %w", err)
+	}
+	return nil
+}
+
+// cmdUninstall removes everything the app owns: logon entry, shortcuts, program folder and
+// (unless asked to keep it) the config that holds the encrypted credential.
+func cmdUninstall(args []string) error {
+	fs := flag.NewFlagSet("uninstall", flag.ContinueOnError)
+	keepConfig := fs.Bool("keep-config", false, "保留配置与凭证")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	dir, _, err := install.Target()
+	if err != nil {
+		return err
+	}
+	steps := []string{"开机自启项", "开始菜单快捷方式", "程序目录 " + dir}
+	if !*keepConfig {
+		if cfgDir, err := store.Dir(); err == nil {
+			steps = append(steps, "配置与凭证 "+cfgDir)
+		}
+	}
+	if isInstalledBuild() && !notify.Confirm("卸载 MiMo Switch",
+		"将删除：\n  · "+strings.Join(steps, "\n  · ")+
+			"\n\n正在运行的本地端点会先退出。确定继续？") {
+		fmt.Println("已取消卸载。")
+		return nil
+	}
+
+	stopRunningInstance()
+	if err := autostart.Disable(); err != nil {
+		fmt.Fprintf(os.Stderr, "删除开机自启项失败: %v\n", err)
+	}
+	if err := install.RemoveStartMenu(); err != nil {
+		fmt.Fprintf(os.Stderr, "删除快捷方式失败: %v\n", err)
+	}
+	if !*keepConfig {
+		if cfgDir, err := store.Dir(); err == nil {
+			if err := os.RemoveAll(cfgDir); err != nil {
+				fmt.Fprintf(os.Stderr, "删除配置失败: %v\n", err)
+			}
+		}
+	}
+	if install.RunningFromTarget(dir) {
+		if err := install.SelfDelete(dir); err != nil {
+			return fmt.Errorf("安排删除程序目录失败: %w", err)
+		}
+		fmt.Println("程序目录将在本进程退出后删除。")
+	} else if err := os.RemoveAll(dir); err != nil {
+		fmt.Fprintf(os.Stderr, "删除程序目录失败: %v\n", err)
+	}
+	fmt.Println("卸载完成。")
+	if isInstalledBuild() {
+		notify.Info("MiMo Switch 已卸载", "开机自启、快捷方式和配置均已移除。")
+	}
+	return nil
+}
+
+// stopRunningInstance asks a live tray to exit before files disappear under it. Silence is
+// fine: nothing running is the common case when uninstalling.
+func stopRunningInstance() {
+	cfg, err := store.Load()
+	if err != nil || cfg.LocalToken == "" {
+		return
+	}
+	client := &http.Client{Timeout: 3 * time.Second}
+	req, err := http.NewRequest(http.MethodPost, "http://"+cfg.Listen+"/api/shutdown", nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set("authorization", "Bearer "+cfg.LocalToken)
+	res, err := client.Do(req)
+	if err != nil {
+		return
+	}
+	defer res.Body.Close()
+	time.Sleep(400 * time.Millisecond)
 }
 
 // existingInstance returns the address of a MiMo Switch that already answers /health there,

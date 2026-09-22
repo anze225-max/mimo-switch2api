@@ -82,6 +82,19 @@
     <div class="note" id="hint"></div>
   </section>
 
+  <section>
+    <h2>启动与保活</h2>
+    <div class="row"><label><input type="checkbox" id="set_autostart"> 开机静默自启（登录后自动运行，不显示窗口）</label></div>
+    <div class="row"><label><input type="checkbox" id="set_restart"> 端点中断后自动重启</label></div>
+    <div class="row">
+      <label>保活续期间隔（分钟，0 = 关闭）
+        <input type="number" id="set_keepalive" min="0" max="10080" step="30" style="width:110px">
+      </label>
+      <button id="save_settings">保存设置</button>
+    </div>
+    <div class="note" id="settings_note"></div>
+  </section>
+
 <script>
 let token = '';
 
@@ -198,8 +211,49 @@ async function load(){
   put('hint', cheapest
     ? '日常任务建议把模型设为 ' + cheapest.id + '（' + cheapest.multiplier + 'x），其余模型按倍率折算更快耗尽额度。'
     : '');
+  fillSettings(s);
   addCopyButtons();
 }
+
+function fillSettings(st){
+  const boxes = [['set_autostart', !!(st.autostart && st.autostart.enabled)],
+                 ['set_restart', !!(st.settings && st.settings.restart_on_crash)]];
+  for (const [id, value] of boxes) {
+    const el = document.getElementById(id);
+    if (document.activeElement !== el) el.checked = value;
+  }
+  const keep = document.getElementById('set_keepalive');
+  if (document.activeElement !== keep && st.settings) keep.value = st.settings.keepalive_minutes;
+  const recovered = st.recovered ? ' · 已自动重启 ' + st.recovered + ' 次' : '';
+  const err = st.autostart && st.autostart.error ? '（读取自启状态失败：' + st.autostart.error + '）' : '';
+  put('settings_note', '自启：' + (st.autostart && st.autostart.enabled ? '已开启' : '未开启') + recovered + err);
+}
+
+async function postJSON(path, body){
+  const note = document.getElementById('settings_note');
+  try {
+    const r = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token }, body: JSON.stringify(body) });
+    const j = await r.json();
+    if (!r.ok) { note.textContent = '保存失败：' + (j.error ? j.error.message : r.status); return false; }
+    note.textContent = '已保存。';
+    load();
+    return true;
+  } catch (e) {
+    note.textContent = '保存失败：' + e.message;
+    return false;
+  }
+}
+
+document.getElementById('set_autostart').onchange = (e) => postJSON('/api/autostart', { enabled: e.target.checked });
+document.getElementById('set_restart').onchange = (e) => postJSON('/api/settings', { restart_on_crash: e.target.checked });
+document.getElementById('save_settings').onclick = () => {
+  const minutes = Number(document.getElementById('set_keepalive').value);
+  if (!Number.isInteger(minutes) || minutes < 0 || minutes > 10080) {
+    document.getElementById('settings_note').textContent = '保活间隔需为 0 到 10080 之间的整数分钟';
+    return;
+  }
+  postJSON('/api/settings', { keepalive_minutes: minutes });
+};
 
 // addCopyButtons decorates each snippet once; load() runs on a timer, so the marker matters.
 function addCopyButtons(){
