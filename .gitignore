@@ -3,3 +3,4 @@ bin/
 *.log
 .gocache/
 .gopath/
+dist/

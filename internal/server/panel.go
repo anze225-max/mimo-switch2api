@@ -53,11 +53,23 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"credential":    s.credential().Masked(),
 		"credential_fp": s.credential().Fingerprint(),
 		"issued_at":     s.credential().IssuedAt,
+		"login_pending": s.LoginPending(),
 		"uptime_s":      int(time.Since(s.startedAt).Seconds()),
 		"usage":         snap,
 		"models":        s.panelModels(),
 		"quota":         s.quotaStatus(),
 	})
+}
+
+// handleLogin opens the passport window from the panel. It sits behind guard() on purpose:
+// a form POST counts as a CORS "simple request", so without the token any web page this
+// machine visits could fire off login windows.
+func (s *Server) handleLogin(w http.ResponseWriter, _ *http.Request) {
+	if err := s.StartLogin(); err != nil {
+		writeError(w, http.StatusConflict, "api_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "note": "已打开登录窗口，请在其中完成登录"})
 }
 
 // quotaStatus returns the live desktop allowance, cached briefly so refreshing the panel

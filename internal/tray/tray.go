@@ -16,6 +16,7 @@ import (
 	"github.com/getlantern/systray"
 
 	"mimo-switch/internal/autostart"
+	"mimo-switch/internal/login"
 	"mimo-switch/internal/server"
 	"mimo-switch/internal/store"
 )
@@ -93,6 +94,7 @@ func ready(srv *server.Server, cfg *store.Config, cancel context.CancelFunc, ser
 	heading := systray.AddMenuItem("MiMo Switch", "本地端点 http://"+cfg.Listen+"/v1")
 	heading.Disable()
 	openPanel := systray.AddMenuItem("打开主界面", "查看用量与各家工具的接入配置")
+	loginItem := systray.AddMenuItem("登录／重新授权小米账号", "在本工具打开的窗口里登录，无需打开 MiMo")
 	refresh := systray.AddMenuItem("立即续期会话", "用 passToken 静默换取新的 serviceToken，无需打开 MiMo")
 	toggleAuto := systray.AddMenuItem("开机静默自启", "登录时自动启动，不显示任何窗口")
 	systray.AddSeparator()
@@ -107,6 +109,18 @@ func ready(srv *server.Server, cfg *store.Config, cancel context.CancelFunc, ser
 			select {
 			case <-openPanel.ClickedCh:
 				openInBrowser("http://" + cfg.Listen + "/")
+			case <-loginItem.ClickedCh:
+				switch err := srv.StartLogin(); {
+				case err != nil:
+					loginItem.SetTitle("登录失败：" + err.Error())
+				default:
+					loginItem.SetTitle("等待你在窗口里完成登录…")
+					// Give the window its own timeout plus a minute before the menu claims
+					// to be idle again; adoption itself happens in the background.
+					time.AfterFunc(login.DefaultTimeout+time.Minute, func() {
+						loginItem.SetTitle("登录／重新授权小米账号")
+					})
+				}
 			case <-refresh.ClickedCh:
 				if err := srv.RefreshNow(); err != nil {
 					refresh.SetTitle("续期失败：" + err.Error())

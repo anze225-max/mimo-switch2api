@@ -14,6 +14,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"mimo-switch/internal/modelmap"
@@ -59,6 +60,9 @@ type Server struct {
 	// desktopBase is the desktop endpoint a session is adopted into. It is a field rather
 	// than the package constant so tests never send traffic off the machine.
 	desktopBase string
+
+	// loginBusy guards the login window so the tray and the panel cannot open two at once.
+	loginBusy atomic.Bool
 }
 
 // quotaTTL bounds how often the panel can refresh the allowance from MiMo.
@@ -177,6 +181,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /", s.handlePanel)
 	mux.HandleFunc("GET /api/status", s.handleStatus)
+	mux.HandleFunc("POST /api/login", s.guard(s.handleLogin))
 	mux.HandleFunc("GET /v1/models", s.guard(s.handleModels))
 	mux.HandleFunc("GET /models", s.guard(s.handleModels))
 	mux.HandleFunc("POST /v1/chat/completions", s.guard(s.handleChat))

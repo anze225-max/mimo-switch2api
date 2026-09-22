@@ -47,6 +47,11 @@
 
   <div class="bar-wrap"><div class="bar" id="bar"></div></div>
 
+  <p>
+    <button id="login">登录／重新授权小米账号</button>
+    <span class="note" id="login_note">MiMo 不必安装或开着；窗口里显示的是小米官方登录页。</span>
+  </p>
+
   <section>
     <div class="row">
       <h2>用量（来自上游返回的真实 token，非估算）</h2>
@@ -78,6 +83,20 @@
   </section>
 
 <script>
+let token = '';
+
+document.getElementById('login').onclick = async () => {
+  const note = document.getElementById('login_note');
+  note.textContent = '正在打开登录窗口…';
+  try {
+    const r = await fetch('/api/login', { method: 'POST', headers: { authorization: 'Bearer ' + token } });
+    const j = await r.json();
+    note.textContent = j.error ? j.error.message : (j.note || '已打开登录窗口');
+  } catch (e) {
+    note.textContent = '请求失败：' + e.message;
+  }
+};
+
 function fmt(n){ return (Math.round(n*1000)/1000).toLocaleString('zh-CN'); }
 function put(id, text, cls){
   const e = document.getElementById(id);
@@ -125,6 +144,10 @@ async function load(){
     : 'MiMo 不必保持运行；支持图片输入（截图、读图），三条端点均已验证。');
 
   const base = 'http://' + s.listen + '/v1';
+  token = s.local_token || '';
+  const loginBtn = document.getElementById('login');
+  loginBtn.disabled = !!s.login_pending;
+  loginBtn.textContent = s.login_pending ? '等待你在窗口里登录…' : '登录／重新授权小米账号';
   put('base', base);
   put('token', s.require_token ? s.local_token : '（未启用本地令牌）');
   put('claude', [

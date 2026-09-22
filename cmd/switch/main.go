@@ -13,6 +13,7 @@ import (
 	"mimo-switch/internal/autostart"
 	"mimo-switch/internal/desktopauth"
 	"mimo-switch/internal/login"
+	"mimo-switch/internal/notify"
 	"mimo-switch/internal/server"
 	"mimo-switch/internal/store"
 	"mimo-switch/internal/tray"
@@ -25,9 +26,17 @@ func main() {
 	flag.Parse()
 	if err := run(flag.Args()); err != nil {
 		fmt.Fprintln(os.Stderr, "错误:", err)
+		if !hasConsole() {
+			// A double-clicked GUI build has no console, so stderr alone would be invisible.
+			notify.Error("MiMo Switch 启动失败", err)
+		}
 		os.Exit(1)
 	}
 }
+
+// hasConsole reports whether the process inherited a terminal, i.e. it was started from one
+// rather than by double-clicking the icon.
+func hasConsole() bool { return !tray.StartedWithoutConsole() }
 
 func printUsage() {
 	fmt.Fprint(os.Stderr, `mimo-switch — 把 MiMo 免费额度暴露成本地 OpenAI/Anthropic 端点
@@ -52,6 +61,9 @@ func printUsage() {
 
 func run(args []string) error {
 	if len(args) == 0 {
+		if !hasConsole() {
+			return cmdTray() // double-clicked: go straight to the silent tray app
+		}
 		printUsage()
 		return fmt.Errorf("缺少子命令")
 	}
@@ -73,7 +85,7 @@ func run(args []string) error {
 	case "serve":
 		return cmdServe(args[1:])
 	case "tray":
-		return tray.Run()
+		return cmdTray()
 	case "autostart":
 		return cmdAutostart(args[1:])
 	default:
@@ -310,12 +322,37 @@ func cmdHarvest(args []string) error {
 	return adopt(session, "已接管 MiMo 桌面端免费额度会话")
 }
 
-// cmdLogin is the supported way to obtain a desktop session: the user signs in to Xiaomi
-// passport in a window this tool owns, so MiMo never has to run or be inspected.
-func cmdLogin() error {
-	sess, err := login.Start()
+// cmdTray is what a double-click gives you: sign in first if there is no credential yet,
+// then run the proxy with a tray icon.
+func cmdTray() error {
+	if err := ensureCredential(); err != nil {
+		return err
+	}
+	return tray.Run()
+}
+
+// ensureCredential obtains a session on first run. MiMo never has to be installed or open:
+// the window we open is Xiaomi's own passport page, and we read only that window's cookie.
+func ensureCredential() error {
+	cfg, err := store.Load()
 	if err != nil {
 		return err
+	}
+	if cfg.Credential() != nil {
+		return nil
+	}
+	session, err := signIn()
+	if err != nil {
+		return err
+	}
+	return adopt(session, "首次登录完成，凭证已保存")
+}
+
+// signIn opens the login window and blocks until the user is through or the window dies.
+func signIn() (*desktopauth.Session, error) {
+	sess, err := login.Start()
+	if err != nil {
+		return nil, err
 	}
 	defer sess.Close()
 
@@ -323,7 +360,13 @@ func cmdLogin() error {
 	fmt.Println("本工具只读取该窗口自己的 Cookie，不会读取 MiMo 的任何数据。")
 	ctx, cancel := context.WithTimeout(context.Background(), login.DefaultTimeout)
 	defer cancel()
-	session, err := sess.Wait(ctx)
+	return sess.Wait(ctx)
+}
+
+// cmdLogin is the supported way to obtain a desktop session: the user signs in to Xiaomi
+// passport in a window this tool owns, so MiMo never has to run or be inspected.
+func cmdLogin() error {
+	session, err := signIn()
 	if err != nil {
 		return err
 	}
