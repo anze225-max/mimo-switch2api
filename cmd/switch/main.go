@@ -12,6 +12,7 @@ import (
 	"mimo-switch/internal/auth"
 	"mimo-switch/internal/autostart"
 	"mimo-switch/internal/desktopauth"
+	"mimo-switch/internal/login"
 	"mimo-switch/internal/server"
 	"mimo-switch/internal/store"
 	"mimo-switch/internal/tray"
@@ -32,15 +33,20 @@ func printUsage() {
 	fmt.Fprint(os.Stderr, `mimo-switch — 把 MiMo 免费额度暴露成本地 OpenAI/Anthropic 端点
 
 用法:
-  mimo-switch authorize            打开官方授权页签发 API key（浏览器里确认一次）
-  mimo-switch authorize --code X   授权页显示 code 时的手动兜底
-  mimo-switch harvest [--file F]   接管 MiMo 桌面端登录会话（免费额度，推荐）
-  mimo-switch harvest --launch     未运行时自动带调试端口拉起 MiMo 并等待登录
+  mimo-switch login                在本工具打开的小米登录窗口里登录，取回桌面端免费额度（推荐）
   mimo-switch refresh              用已存的 passToken 静默续期（无需 MiMo 运行）
-  mimo-switch status               查看已保存的凭证（掩码显示）
-  mimo-switch models               用该 key 拉取上游模型列表，验证可用
-  mimo-switch probe [model]        发一条最小补全，验证端到端
   mimo-switch serve                启动本地反代
+  mimo-switch tray                 后台运行 + 托盘图标（静默，无控制台）
+  mimo-switch autostart on|off     开机静默自启
+  mimo-switch status               查看已保存的凭证（掩码显示）
+  mimo-switch models               用当前凭证拉取上游模型列表，验证可用
+  mimo-switch probe [model]        发一条最小补全，验证端到端
+
+  其它:
+  mimo-switch authorize            打开官方授权页签发 API key（需小米付费套餐）
+  mimo-switch authorize --code X   授权页显示 code 时的手动兜底
+  mimo-switch harvest [--file F]   从正在运行的 MiMo 取会话（旧办法，login 不可用时的兜底）
+  mimo-switch harvest --launch     未运行时自动带调试端口拉起 MiMo 并等待登录
 `)
 }
 
@@ -52,6 +58,8 @@ func run(args []string) error {
 	switch args[0] {
 	case "authorize":
 		return cmdAuthorize(args[1:])
+	case "login":
+		return cmdLogin()
 	case "harvest":
 		return cmdHarvest(args[1:])
 	case "refresh":
@@ -299,7 +307,32 @@ func cmdHarvest(args []string) error {
 		}
 	}
 
-	// Verify against the models MiMo currently advertises, not a hardcoded list.
+	return adopt(session, "已接管 MiMo 桌面端免费额度会话")
+}
+
+// cmdLogin is the supported way to obtain a desktop session: the user signs in to Xiaomi
+// passport in a window this tool owns, so MiMo never has to run or be inspected.
+func cmdLogin() error {
+	sess, err := login.Start()
+	if err != nil {
+		return err
+	}
+	defer sess.Close()
+
+	fmt.Println("已打开小米登录窗口，请在该窗口里完成登录（5 分钟超时）。")
+	fmt.Println("本工具只读取该窗口自己的 Cookie，不会读取 MiMo 的任何数据。")
+	ctx, cancel := context.WithTimeout(context.Background(), login.DefaultTimeout)
+	defer cancel()
+	session, err := sess.Wait(ctx)
+	if err != nil {
+		return err
+	}
+	return adopt(session, "登录成功，桌面端会话已保存")
+}
+
+// adopt verifies a desktop session against the models MiMo currently advertises, rather than
+// a hardcoded list, and stores it as the live credential.
+func adopt(session *desktopauth.Session, done string) error {
 	catalog, _ := usage.LoadTextModels()
 	candidates := make([]string, 0, len(catalog))
 	for _, m := range catalog {
@@ -326,7 +359,7 @@ func cmdHarvest(args []string) error {
 	if err := cfg.Save(); err != nil {
 		return err
 	}
-	fmt.Println("已接管 MiMo 桌面端免费额度会话。")
+	fmt.Println(done + "。")
 	fmt.Printf("  上游      : %s\n", desktopauth.BaseURL)
 	fmt.Printf("  可用模型  : %s\n", model)
 	fmt.Printf("  凭证      : %s\n", cfg.Credential().Masked())
@@ -335,7 +368,6 @@ func cmdHarvest(args []string) error {
 	}
 	return nil
 }
-
 func cmdAutostart(args []string) error {
 	action := "status"
 	if len(args) > 0 {
