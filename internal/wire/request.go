@@ -44,6 +44,15 @@ type Block struct {
 	ToolUseID string          `json:"tool_use_id,omitempty"`
 	Content   json.RawMessage `json:"content,omitempty"`
 	IsError   bool            `json:"is_error,omitempty"`
+	Source    *ImageSource    `json:"source,omitempty"`
+}
+
+// ImageSource is Anthropic's image payload wrapper: either inline base64 or a URL.
+type ImageSource struct {
+	Type      string `json:"type"`
+	MediaType string `json:"media_type,omitempty"`
+	Data      string `json:"data,omitempty"`
+	URL       string `json:"url,omitempty"`
 }
 
 type Tool struct {
@@ -147,13 +156,18 @@ func AnthropicToOpenAI(body []byte) ([]byte, error) {
 
 // messageToOpenAI expands one Anthropic message into the OpenAI messages it implies,
 // because a single Anthropic user turn can carry several tool results that OpenAI
-// models as separate role:"tool" messages. Image and document blocks are dropped: the
-// upstream text models this tool targets cannot take them.
+// models as separate role:"tool" messages.
+//
+// Anthropic's model picker advertises TEXT only, but mimo-v2.6 accepts and understands
+// images (verified against the live endpoint), so image blocks are carried across rather
+// than dropped. Document blocks remain unsupported.
 func messageToOpenAI(role string, blocks []Block) []ChatMessage {
 	var (
-		text  strings.Builder
-		calls []ChatToolCall
-		tools []ChatMessage
+		text       strings.Builder
+		calls      []ChatToolCall
+		tools      []ChatMessage
+		images     []map[string]any
+		toolImages []map[string]any
 	)
 	for _, b := range blocks {
 		switch b.Type {
@@ -165,20 +179,66 @@ func messageToOpenAI(role string, blocks []Block) []ChatMessage {
 				Function: ChatFunction{Name: b.Name, Arguments: string(b.Input)},
 			})
 		case "tool_result":
-			tools = append(tools, ChatMessage{
-				Role: "tool", ToolCallID: b.ToolUseID, Content: toolResultText(b),
-			})
+			body, pics := toolResultContent(b)
+			tools = append(tools, ChatMessage{Role: "tool", ToolCallID: b.ToolUseID, Content: body})
+			toolImages = append(toolImages, pics...)
+		case "image":
+			if url, ok := imageURL(b.Source); ok {
+				images = append(images, map[string]any{"type": "image_url", "image_url": map[string]any{"url": url}})
+			}
 		}
 	}
+	images = append(images, toolImages...)
 
 	out := tools // tool results must land before any prose in the same turn
 	if len(calls) > 0 {
-		return append(out, ChatMessage{Role: "assistant", Content: nilOrString(text.String()), ToolCalls: calls})
+		out = append(out, ChatMessage{Role: "assistant", Content: nilOrString(text.String()), ToolCalls: calls})
+	} else {
+		content := multimodalContent(text.String(), images)
+		if content != nil || role != "assistant" {
+			out = append(out, ChatMessage{Role: role, Content: content})
+		}
+		return out
 	}
-	if s := text.String(); s != "" || role != "assistant" {
-		out = append(out, ChatMessage{Role: role, Content: nilOrString(s)})
+	if len(toolImages) > 0 {
+		out = append(out, ChatMessage{Role: "user", Content: multimodalContent("", toolImages)})
 	}
 	return out
+}
+
+// multimodalContent returns OpenAI's content-part array when images are present, the
+// bare string when they are not, and nil for an empty turn.
+func multimodalContent(text string, images []map[string]any) any {
+	if len(images) == 0 {
+		return nilOrString(text)
+	}
+	parts := make([]map[string]any, 0, len(images)+1)
+	if text != "" {
+		parts = append(parts, map[string]any{"type": "text", "text": text})
+	}
+	parts = append(parts, images...)
+	return parts
+}
+
+// imageURL converts an Anthropic image source into a data: URL or plain URL that the
+// OpenAI-shaped endpoint accepts.
+func imageURL(src *ImageSource) (string, bool) {
+	if src == nil {
+		return "", false
+	}
+	switch src.Type {
+	case "base64":
+		if src.Data == "" || src.MediaType == "" {
+			return "", false
+		}
+		return "data:" + src.MediaType + ";base64," + src.Data, true
+	case "url":
+		if src.URL == "" {
+			return "", false
+		}
+		return src.URL, true
+	}
+	return "", false
 }
 
 func nilOrString(s string) any {
@@ -200,31 +260,36 @@ func (m Message) blocks() ([]Block, error) {
 	return blocks, nil
 }
 
-func toolResultText(b Block) string {
-	if len(b.Content) == 0 {
-		return ""
-	}
-	var bare string
-	if err := json.Unmarshal(b.Content, &bare); err == nil {
-		if b.IsError {
-			return "Error: " + bare
+// toolResultContent flattens a tool_result into the text the upstream role:"tool"
+// message carries, plus any pictures it wrapped — reading a file with Claude Code's Read
+// tool returns a screenshot-shaped image block, and dropping it would blind the model.
+func toolResultContent(b Block) (string, []map[string]any) {
+	text, images := "", []map[string]any(nil)
+	switch {
+	case len(b.Content) == 0:
+	case json.Unmarshal(b.Content, &text) == nil:
+	default:
+		var blocks []Block
+		if err := json.Unmarshal(b.Content, &blocks); err != nil {
+			return string(b.Content), nil
 		}
-		return bare
-	}
-	var blocks []Block
-	if err := json.Unmarshal(b.Content, &blocks); err == nil {
 		var sb strings.Builder
 		for _, inner := range blocks {
-			if inner.Type == "text" {
+			switch inner.Type {
+			case "text":
 				sb.WriteString(inner.Text)
+			case "image":
+				if url, ok := imageURL(inner.Source); ok {
+					images = append(images, map[string]any{"type": "image_url", "image_url": map[string]any{"url": url}})
+				}
 			}
 		}
-		if b.IsError {
-			return "Error: " + sb.String()
-		}
-		return sb.String()
+		text = sb.String()
 	}
-	return string(b.Content)
+	if b.IsError {
+		text = "Error: " + text
+	}
+	return text, images
 }
 
 func systemText(raw json.RawMessage) string {

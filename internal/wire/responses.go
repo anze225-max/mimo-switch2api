@@ -68,11 +68,17 @@ func ResponsesToChat(body []byte) ([]byte, error) {
 				Role: "tool", ToolCallID: item.CallID, Content: rawTextOrParts(item.Output),
 			})
 		default:
-			text := rawTextOrParts(item.Content)
-			if text == "" {
+			parts := responsesContent(item.Content)
+			if len(parts) == 0 {
 				continue
 			}
-			out.Messages = append(out.Messages, ChatMessage{Role: firstNonEmpty(item.Role, "user"), Content: text})
+			var content any
+			if len(parts) == 1 && parts[0]["type"] == "text" {
+				content = parts[0]["text"]
+			} else {
+				content = parts
+			}
+			out.Messages = append(out.Messages, ChatMessage{Role: firstNonEmpty(item.Role, "user"), Content: content})
 		}
 	}
 	if len(out.Messages) == 0 {
@@ -106,6 +112,49 @@ func inputItems(raw json.RawMessage) ([]inputItem, error) {
 		return nil, fmt.Errorf("responses input: %w", err)
 	}
 	return items, nil
+}
+
+// responsesContent converts a Responses content array into OpenAI chat content parts,
+// carrying input_image through so Codex screenshots survive the hop.
+func responsesContent(raw json.RawMessage) []map[string]any {
+	if len(raw) == 0 {
+		return nil
+	}
+	var bare string
+	if err := json.Unmarshal(raw, &bare); err == nil {
+		if bare == "" {
+			return nil
+		}
+		return []map[string]any{{"type": "text", "text": bare}}
+	}
+	var parts []struct {
+		Type     string `json:"type"`
+		Text     string `json:"text"`
+		ImageURL string `json:"image_url"`
+		Detail   string `json:"detail"`
+	}
+	if err := json.Unmarshal(raw, &parts); err != nil {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(parts))
+	for _, p := range parts {
+		switch p.Type {
+		case "input_text", "output_text", "text":
+			if p.Text != "" {
+				out = append(out, map[string]any{"type": "text", "text": p.Text})
+			}
+		case "input_image", "image_url":
+			if p.ImageURL == "" {
+				continue
+			}
+			image := map[string]any{"url": p.ImageURL}
+			if p.Detail != "" {
+				image["detail"] = p.Detail
+			}
+			out = append(out, map[string]any{"type": "image_url", "image_url": image})
+		}
+	}
+	return out
 }
 
 func firstNonEmpty(values ...string) string {
