@@ -182,11 +182,28 @@ func (c *Config) Save() error {
 	if err != nil {
 		return err
 	}
-	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+	// A random temp name in the same directory: the tray's auto-renewal and a CLI command
+	// can both save, and a fixed "config.json.tmp" would let one clobber the other's write
+	// before the rename.
+	dir, file := filepath.Split(p)
+	tmp, err := os.CreateTemp(dir, file+".tmp*")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, p)
+	if _, err := tmp.Write(raw); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmp.Name())
+		return err
+	}
+	if err := os.Rename(tmp.Name(), p); err != nil {
+		os.Remove(tmp.Name())
+		return err
+	}
+	return nil
 }
 
 func randomToken() (string, error) {

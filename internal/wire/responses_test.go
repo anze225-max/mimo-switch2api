@@ -147,6 +147,48 @@ func TestResponseStreamTextAndReasoning(t *testing.T) {
 	}
 }
 
+// A client that ignores the deltas and reads only response.completed must still find the
+// answer there, so the items embedded in it carry content, not just ids.
+func TestResponseStreamCompletedCarriesFullItems(t *testing.T) {
+	events := feedResponses(t,
+		`{"choices":[{"index":0,"delta":{"reasoning_content":"先想想","content":"红色"},"finish_reason":"stop"}]}`)
+
+	raw, err := json.Marshal(events[len(events)-1].Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var frame struct {
+		Response struct {
+			Output []struct {
+				Type    string `json:"type"`
+				Content []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"output"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(raw, &frame); err != nil {
+		t.Fatal(err)
+	}
+	wanted := map[string]string{"message": "红色", "reasoning": "先想想"}
+	for item, text := range wanted {
+		found := false
+		for _, o := range frame.Response.Output {
+			if o.Type != item {
+				continue
+			}
+			found = true
+			if len(o.Content) != 1 || o.Content[0].Text != text {
+				t.Errorf("%s item content = %+v, want %q", item, o.Content, text)
+			}
+		}
+		if !found {
+			t.Errorf("no %s item in completed output: %s", item, raw)
+		}
+	}
+}
+
 func TestResponseStreamFunctionCallArgumentsReassemble(t *testing.T) {
 	events := feedResponses(t,
 		`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"read","arguments":""}}]}}]}`,

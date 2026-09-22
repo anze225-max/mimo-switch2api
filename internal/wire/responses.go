@@ -374,35 +374,39 @@ func (s *ResponseStream) Usage() (promptTokens, completionTokens int) {
 func (s *ResponseStream) Finish() []Event {
 	var events []Event
 	if s.reasoningItemID != "" {
+		item := map[string]any{
+			"type": "reasoning", "id": s.reasoningItemID, "role": "assistant", "status": "completed",
+			"content": []map[string]any{{"type": "reasoning_text", "text": s.reasoning.String()}},
+		}
+		// The completed payload must carry what the deltas delivered, so publish the same item.
+		s.items[s.reasoningIndex] = item
 		events = append(events, Event{Type: "response.output_item.done", Data: map[string]any{
-			"type": "response.output_item.done", "output_index": s.reasoningIndex,
-			"item": map[string]any{
-				"type": "reasoning", "id": s.reasoningItemID, "role": "assistant", "status": "completed",
-				"content": []map[string]any{{"type": "reasoning_text", "text": s.reasoning.String()}},
-			},
+			"type": "response.output_item.done", "output_index": s.reasoningIndex, "item": item,
 		}})
 	}
 	if s.textItemID != "" {
+		item := map[string]any{
+			"type": "message", "id": s.textItemID, "role": "assistant", "status": "completed",
+			"content": []map[string]any{{"type": "output_text", "text": s.text.String(), "annotations": []any{}}},
+		}
+		s.items[s.textIndex] = item
 		events = append(events,
 			Event{Type: "response.output_text.done", Data: map[string]any{
 				"type": "response.output_text.done", "item_id": s.textItemID, "text": s.text.String(),
 			}},
 			Event{Type: "response.output_item.done", Data: map[string]any{
-				"type": "response.output_item.done", "output_index": s.textIndex,
-				"item": map[string]any{
-					"type": "message", "id": s.textItemID, "role": "assistant", "status": "completed",
-					"content": []map[string]any{{"type": "output_text", "text": s.text.String(), "annotations": []any{}}},
-				},
+				"type": "response.output_item.done", "output_index": s.textIndex, "item": item,
 			}})
 	}
 	for _, key := range s.toolOrder {
 		block := s.tools[key]
+		item := map[string]any{
+			"type": "function_call", "id": block.itemID, "call_id": block.callID,
+			"name": block.name, "arguments": block.args.String(), "status": "completed",
+		}
+		s.items[block.index] = item
 		events = append(events, Event{Type: "response.output_item.done", Data: map[string]any{
-			"type": "response.output_item.done", "output_index": block.index,
-			"item": map[string]any{
-				"type": "function_call", "id": block.itemID, "call_id": block.callID,
-				"name": block.name, "arguments": block.args.String(), "status": "completed",
-			},
+			"type": "response.output_item.done", "output_index": block.index, "item": item,
 		}})
 	}
 	events = append(events, Event{Type: "response.completed", Data: map[string]any{
