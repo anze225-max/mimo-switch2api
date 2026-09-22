@@ -56,8 +56,8 @@ func (s *seen) all() []string {
 
 func newTestServer(baseURL string, cred *store.Credential, relogin relogin) *Server {
 	return &Server{
-		client:     upstream.NewCookie(cred.Cookie, baseURL),
-		credential: cred,
+		client: upstream.NewCookie(cred.Cookie, baseURL),
+		cred:   cred,
 		// cfg stays nil so a renewal cannot touch the real on-disk config.
 		tracker: usage.NewTracker(nil),
 		relogin: relogin,
@@ -103,8 +103,12 @@ func TestPostRenewsSessionOn401AndRetries(t *testing.T) {
 	if cookies[1] != "serviceToken=FRESH; userId=42" {
 		t.Errorf("retry did not carry the renewed cookie: %q", cookies[1])
 	}
-	if cred.Model != "mimo-v2.6-flash" {
-		t.Errorf("credential model not updated after renewal: %q", cred.Model)
+	live := s.credential()
+	if live.Model != "mimo-v2.6-flash" || live.Cookie != "serviceToken=FRESH; userId=42" {
+		t.Errorf("published credential after renewal = %+v", live)
+	}
+	if cred.Model != "mimo-v2.6-pro" {
+		t.Errorf("renewal must swap in a copy, not edit the credential it was given: %q", cred.Model)
 	}
 }
 

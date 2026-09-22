@@ -35,23 +35,23 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	snap := s.tracker.Snapshot()
-	desktop := s.credential.Kind == store.KindDesktop
-	label := planLabel[s.credential.Plan()]
+	desktop := s.credential().Kind == store.KindDesktop
+	label := planLabel[s.credential().Plan()]
 	if label == "" {
-		label = s.credential.Plan()
+		label = s.credential().Plan()
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"healthy":       true,
-		"plan":          s.credential.Plan(),
+		"plan":          s.credential().Plan(),
 		"plan_label":    label,
 		"desktop":       desktop,
-		"upstream":      s.credential.BaseURL,
+		"upstream":      s.credential().BaseURL,
 		"model":         s.modelOrDefault(),
 		"listen":        s.listen,
 		"require_token": s.requireToken,
 		"local_token":   s.localToken,
-		"credential":    s.credential.Masked(),
-		"issued_at":     s.credential.IssuedAt,
+		"credential":    s.credential().Masked(),
+		"issued_at":     s.credential().IssuedAt,
 		"uptime_s":      int(time.Since(s.startedAt).Seconds()),
 		"usage":         snap,
 		"models":        s.panelModels(),
@@ -63,7 +63,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 // cannot hammer MiMo's endpoint. A failure is reported as text rather than hidden, because
 // a missing number is itself information the user needs.
 func (s *Server) quotaStatus() map[string]any {
-	if s.credential.Kind != store.KindDesktop {
+	if s.credential().Kind != store.KindDesktop {
 		return map[string]any{"available": false, "note": "非桌面端会话，无此额度接口"}
 	}
 	s.quotaMu.Lock()
@@ -74,7 +74,7 @@ func (s *Server) quotaStatus() map[string]any {
 			"reset_date": s.quotaValue.ResetDate, "cached": true,
 		}
 	}
-	u, err := quota.Fetch(s.credential.BaseURL, s.credential.Cookie)
+	u, err := quota.Fetch(s.credential().BaseURL, s.credential().Cookie)
 	if err != nil {
 		return map[string]any{"available": false, "note": err.Error()}
 	}
@@ -88,8 +88,8 @@ func (s *Server) quotaStatus() map[string]any {
 // panelModels reports the live catalogue with ratios, so the panel reflects a MiMo update
 // without a code change.
 func (s *Server) panelModels() []usage.Model {
-	out := make([]usage.Model, 0, len(s.models))
-	for _, m := range s.models {
+	out := make([]usage.Model, 0, len(s.catalogue()))
+	for _, m := range s.catalogue() {
 		out = append(out, usage.Model{ID: m.ID, Multiplier: m.Ratio})
 	}
 	return out
@@ -98,8 +98,8 @@ func (s *Server) panelModels() []usage.Model {
 // modelOrDefault keeps the panel's copy-paste snippets usable even before a harvest has
 // pinned a specific model.
 func (s *Server) modelOrDefault() string {
-	if s.credential.Model != "" {
-		return s.credential.Model
+	if s.credential().Model != "" {
+		return s.credential().Model
 	}
-	return usage.PreferredModel(s.models)
+	return usage.PreferredModel(s.catalogue())
 }

@@ -50,7 +50,7 @@ func (s *Server) recordFromChatJSON(raw []byte) {
 	}
 	model, in, out := fields.tokens()
 	if model == "" {
-		model = s.credential.Model
+		model = s.credential().Model
 	}
 	s.record(model, in, out, false)
 }

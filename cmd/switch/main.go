@@ -177,7 +177,7 @@ func requireCredential() (*store.Config, *store.Credential, error) {
 	}
 	cred := cfg.Credential()
 	if cred == nil {
-		return nil, nil, fmt.Errorf("还没有凭证，先运行: mimo-switch authorize")
+		return nil, nil, fmt.Errorf("还没有凭证，先运行: mimo-switch login")
 	}
 	return cfg, cred, nil
 }
@@ -407,10 +407,10 @@ func cmdRefresh() error {
 		return err
 	}
 	if cfg.Credential() == nil {
-		return fmt.Errorf("还没有凭证，先运行: mimo-switch harvest")
+		return fmt.Errorf("还没有凭证，先运行: mimo-switch login")
 	}
 	if cfg.Credential().PassToken == "" {
-		return fmt.Errorf("当前凭证没有保存 passToken，无法自动续期。请重新运行: mimo-switch harvest")
+		return fmt.Errorf("当前凭证没有保存 passToken，无法自动续期。请重新运行: mimo-switch login")
 	}
 	srv, err := server.New(cfg)
 	if err != nil {

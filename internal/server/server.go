@@ -26,14 +26,18 @@ import (
 
 type Server struct {
 	client       *upstream.Client
-	credential   *store.Credential
 	cfg          *store.Config
 	listen       string
 	localToken   string
 	requireToken bool
 	tracker      *usage.Tracker
 	startedAt    time.Time
-	models       []usage.CatalogModel
+
+	// sessionMu guards the live credential and catalogue. Renewal publishes copies rather
+	// than mutating them, so a handler can never read a half-written string or slice header.
+	sessionMu sync.RWMutex
+	cred      *store.Credential
+	modelList []usage.CatalogModel
 
 	refreshLock sync.Mutex
 	refreshedAt time.Time
@@ -54,7 +58,7 @@ const quotaTTL = 60 * time.Second
 func New(cfg *store.Config) (*Server, error) {
 	cred := cfg.Credential()
 	if cred == nil {
-		return nil, errors.New("尚未签发凭证，请先运行 mimo-switch authorize 或 mimo-switch harvest")
+		return nil, errors.New("尚未签发凭证，请先运行 mimo-switch login")
 	}
 	client := upstream.New(cred.SK, cred.BaseURL)
 	if cred.Kind == store.KindDesktop {
@@ -69,47 +73,75 @@ func New(cfg *store.Config) (*Server, error) {
 	}
 	s := &Server{
 		client:       client,
-		credential:   cred,
+		cred:         cred,
 		cfg:          cfg,
 		listen:       cfg.Listen,
 		localToken:   cfg.LocalToken,
 		requireToken: cfg.RequireToken,
 		tracker:      usage.NewTracker(models),
 		startedAt:    time.Now(),
-		models:       models,
+		modelList:    models,
 	}
 	s.pinModel()
 	aliases := cfg.ModelAliases
 	if len(aliases) == 0 {
 		aliases = modelmap.DefaultAliases()
 	}
-	s.resolver = modelmap.New(s.catalogIDs(), aliases, s.credential.Model)
+	s.resolver = modelmap.New(s.catalogIDs(), aliases, s.credential().Model)
 	return s, nil
+}
+
+// credential returns the live session. Treat the result as read-only: renewal swaps in a
+// copy instead of editing the published one.
+func (s *Server) credential() *store.Credential {
+	s.sessionMu.RLock()
+	defer s.sessionMu.RUnlock()
+	return s.cred
+}
+
+// catalogue returns the model list read from MiMo's own cache.
+func (s *Server) catalogue() []usage.CatalogModel {
+	s.sessionMu.RLock()
+	defer s.sessionMu.RUnlock()
+	return s.modelList
+}
+
+// setSession publishes a new session, and a new catalogue when one was supplied.
+func (s *Server) setSession(cred *store.Credential, models []usage.CatalogModel) {
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+	s.cred = cred
+	if len(models) > 0 {
+		s.modelList = models
+	}
 }
 
 // catalogIDs lists the real model ids the desktop currently offers.
 func (s *Server) catalogIDs() []string {
-	ids := make([]string, 0, len(s.models))
-	for _, m := range s.models {
+	models := s.catalogue()
+	ids := make([]string, 0, len(models))
+	for _, m := range models {
 		ids = append(ids, m.ID)
 	}
 	return ids
 }
 
 // pinModel drops a stored default that the current catalogue no longer offers, so clients
-// asking for an unknown model are not sent a stale name.
+// asking for an unknown model are not sent a stale name. Only ever called while building
+// the server, so it edits the credential directly.
 func (s *Server) pinModel() {
-	if len(s.models) == 0 {
+	models := s.catalogue()
+	if len(models) == 0 {
 		return
 	}
-	for _, m := range s.models {
-		if m.ID == s.credential.Model {
+	for _, m := range models {
+		if m.ID == s.cred.Model {
 			return
 		}
 	}
-	if preferred := usage.PreferredModel(s.models); preferred != "" {
-		fmt.Fprintf(os.Stderr, "凭证里的模型 %q 已不在目录中，改用 %q\n", s.credential.Model, preferred)
-		s.credential.Model = preferred
+	if preferred := usage.PreferredModel(models); preferred != "" {
+		fmt.Fprintf(os.Stderr, "凭证里的模型 %q 已不在目录中，改用 %q\n", s.cred.Model, preferred)
+		s.cred.Model = preferred
 	}
 }
 
@@ -200,15 +232,15 @@ func isLocalHost(host string) bool {
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":   "ok",
-		"plan":     s.credential.Plan(),
-		"upstream": s.credential.BaseURL,
-		"key":      s.credential.Masked(),
+		"plan":     s.credential().Plan(),
+		"upstream": s.credential().BaseURL,
+		"key":      s.credential().Masked(),
 	})
 }
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	// The desktop broker has no model listing, so advertise what the credential proved.
-	if s.credential.Kind == store.KindDesktop {
+	if s.credential().Kind == store.KindDesktop {
 		writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": s.desktopModels()})
 		return
 	}
@@ -224,9 +256,9 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 func (s *Server) desktopModels() []map[string]any {
 	seen := map[string]bool{}
 	out := []map[string]any{}
-	ids := make([]string, 0, len(s.models)+1)
-	ids = append(ids, s.credential.Model)
-	for _, m := range s.models {
+	ids := make([]string, 0, len(s.catalogue())+1)
+	ids = append(ids, s.credential().Model)
+	for _, m := range s.catalogue() {
 		ids = append(ids, m.ID)
 	}
 	for _, id := range ids {
@@ -235,7 +267,7 @@ func (s *Server) desktopModels() []map[string]any {
 		}
 		seen[id] = true
 		out = append(out, map[string]any{
-			"id": id, "object": "model", "created": s.credential.IssuedAt.Unix(),
+			"id": id, "object": "model", "created": s.credential().IssuedAt.Unix(),
 			"owned_by": "xiaomi-mimo-desktop",
 		})
 	}
@@ -247,7 +279,7 @@ func (s *Server) desktopModels() []map[string]any {
 // mapped through the alias table; anything unmapped falls back to the default and is
 // recorded so the mapping can be made explicit.
 func (s *Server) rewriteModel(body []byte) []byte {
-	if s.credential.Kind != store.KindDesktop || s.resolver == nil {
+	if s.credential().Kind != store.KindDesktop || s.resolver == nil {
 		return body
 	}
 	var probe struct {
@@ -288,7 +320,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer res.Body.Close()
-	relayAndAccount(w, res, s.credential.Model, func(model string, in, out int) {
+	relayAndAccount(w, res, s.credential().Model, func(model string, in, out int) {
 		s.record(model, in, out, false)
 	})
 }
@@ -357,7 +389,7 @@ func (s *Server) streamAnthropic(w http.ResponseWriter, r *http.Request, body io
 	stream := wire.NewStream()
 	relayEvents(w, flusher, body, stream.Start, stream.Feed, stream.Finish)
 	in, out := stream.Usage()
-	s.record(s.credential.Model, in, out, false)
+	s.record(s.credential().Model, in, out, false)
 }
 
 // handleResponses serves the OpenAI Responses API shape used by Codex, on top of the
@@ -418,7 +450,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	stream := wire.NewResponseStream()
 	relayEvents(w, flusher, res.Body, stream.Start, stream.Feed, stream.Finish)
 	in, out := stream.Usage()
-	s.record(s.credential.Model, in, out, false)
+	s.record(s.credential().Model, in, out, false)
 }
 
 // relayEvents drives one translation from an upstream OpenAI SSE body: it parses data
@@ -469,7 +501,7 @@ func relayEvents(
 func (s *Server) forwardError(w http.ResponseWriter, err error) {
 	var status *upstream.StatusError
 	if errors.As(err, &status) {
-		s.record(s.credential.Model, 0, 0, true)
+		s.record(s.credential().Model, 0, 0, true)
 		if status.RetryAfter != "" {
 			w.Header().Set("Retry-After", status.RetryAfter)
 		}
