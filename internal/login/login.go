@@ -19,11 +19,12 @@ import (
 	"mimo-switch/internal/desktopauth"
 )
 
-// loginURL asks passport for a MiMo-desktop session directly. MiMo's own jar keeps its
-// serviceToken on .mimo-server-cn.xiaomimimo.com, so the redirect chain started from here can
-// leave us that token outright; asking for the passport sid instead yields a token for the
-// wrong service and the later exchange then fails with 70016.
-const loginURL = "https://account.xiaomi.com/pass/serviceLogin?sid=mimopc&_locale=zh_CN"
+// loginURL is MiMo's own sign-in surface, not the passport page. Opening it unauthenticated
+// makes mimo-server drive the whole redirect chain (serviceLogin?sid=mimopc -> passport login
+// -> back to /api/user/xiaomi/me) and mint the serviceToken itself, which is why MiMo's cookie
+// jar holds a token scoped to .mimo-server-cn.xiaomimimo.com. Going straight to passport only
+// completes half of that chain, and its Phase 2 then answers 401.
+const loginURL = "https://mimo-server-cn.xiaomimimo.com/api/user/xiaomi/me"
 
 // DefaultTimeout is generous: signing in usually means fumbling for a phone to scan a QR.
 const DefaultTimeout = 5 * time.Minute

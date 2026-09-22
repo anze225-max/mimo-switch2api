@@ -175,7 +175,7 @@ func (s *Session) Verify(candidates ...string) (string, error) {
 	if lastErr == nil {
 		lastErr = fmt.Errorf("没有可用模型")
 	}
-	return "", fmt.Errorf("会话未被任何模型接受（serviceToken 可能已过期，请在 MiMo 重新登录后 harvest）：%w", lastErr)
+	return "", fmt.Errorf("会话未被任何模型接受（serviceToken 可能已过期，请重新执行: mimo-switch harvest --launch）：%w", lastErr)
 }
 
 // ExportPath is where a manual cookie export is expected, for --file.

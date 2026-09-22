@@ -43,6 +43,11 @@ func redirectLogsToFile() (string, error) {
 		return "", err
 	}
 	path := filepath.Join(dir, "tray.log")
+	// A resident proxy runs for weeks, so roll the log over instead of appending forever.
+	const maxLogBytes = 2 << 20
+	if st, err := os.Stat(path); err == nil && st.Size() > maxLogBytes {
+		_ = os.Rename(path, path+".1")
+	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return "", err
