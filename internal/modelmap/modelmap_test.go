@@ -26,6 +26,22 @@ func TestNormaliseIgnoresPunctuationAndCase(t *testing.T) {
 	}
 }
 
+// A client that capitalises or spaces a real id still resolves, and the upstream is sent
+// the exact lowercase id it will accept.
+func TestKnownModelInAnyCaseResolvesToTheCanonicalID(t *testing.T) {
+	r := newTestResolver()
+	for _, in := range []string{"MiMo V2.6 Pro", "mimo-v2.6-pro", "MIMO-V2.6-PRO"} {
+		target, recognised := r.Resolve(in)
+		if !recognised {
+			t.Errorf("Resolve(%q) says the client name is unknown", in)
+			continue
+		}
+		if target != "mimo-v2.6-pro" {
+			t.Errorf("Resolve(%q) = %q, want the canonical id", in, target)
+		}
+	}
+}
+
 func TestClientLabelsResolveToTheRequestedTiers(t *testing.T) {
 	r := newTestResolver()
 	cases := []struct {

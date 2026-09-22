@@ -66,23 +66,53 @@ func (s *Server) quotaStatus() map[string]any {
 	if s.credential().Kind != store.KindDesktop {
 		return map[string]any{"available": false, "note": "非桌面端会话，无此额度接口"}
 	}
+
+	// The upstream call can take seconds, so it runs outside the lock and only ever once at
+	// a time. A panel refresh that arrives mid-fetch gets the cached figure instead of
+	// queueing behind it, which used to freeze the page.
 	s.quotaMu.Lock()
-	defer s.quotaMu.Unlock()
-	if s.quotaValue != nil && time.Since(s.quotaAt) < quotaTTL {
-		return map[string]any{
-			"available": true, "remaining_percent": s.quotaValue.RemainingPercent,
-			"reset_date": s.quotaValue.ResetDate, "cached": true,
-		}
+	cached := s.quotaValue
+	fresh := cached != nil && time.Since(s.quotaAt) < quotaTTL
+	startFetch := !fresh && !s.quotaFetching
+	if startFetch {
+		s.quotaFetching = true
 	}
-	u, err := quota.Fetch(s.credential().BaseURL, s.credential().Cookie)
+	s.quotaMu.Unlock()
+
+	if fresh || !startFetch {
+		if cached == nil {
+			return map[string]any{"available": false, "note": "额度查询进行中…"}
+		}
+		return quotaJSON(cached, "")
+	}
+	defer func() {
+		s.quotaMu.Lock()
+		s.quotaFetching = false
+		s.quotaMu.Unlock()
+	}()
+
+	cred := s.credential()
+	u, err := quota.Fetch(cred.BaseURL, cred.Cookie)
 	if err != nil {
+		if cached != nil {
+			return quotaJSON(cached, err.Error())
+		}
 		return map[string]any{"available": false, "note": err.Error()}
 	}
+	s.quotaMu.Lock()
 	s.quotaValue, s.quotaAt = u, time.Now()
-	return map[string]any{
-		"available": true, "remaining_percent": u.RemainingPercent,
-		"reset_date": u.ResetDate,
+	s.quotaMu.Unlock()
+	return quotaJSON(u, "")
+}
+
+func quotaJSON(u *quota.Usage, note string) map[string]any {
+	out := map[string]any{
+		"available": true, "remaining_percent": u.RemainingPercent, "reset_date": u.ResetDate,
 	}
+	if note != "" {
+		out["note"] = note
+	}
+	return out
 }
 
 // panelModels reports the live catalogue with ratios, so the panel reflects a MiMo update

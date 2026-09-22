@@ -42,9 +42,10 @@ type Server struct {
 	refreshLock sync.Mutex
 	refreshedAt time.Time
 
-	quotaMu    sync.Mutex
-	quotaValue *quota.Usage
-	quotaAt    time.Time
+	quotaMu       sync.Mutex
+	quotaValue    *quota.Usage
+	quotaAt       time.Time
+	quotaFetching bool
 
 	resolver *modelmap.Resolver
 
@@ -493,7 +494,18 @@ func relayEvents(
 			return
 		}
 	}
+	logStreamInterrupted("协议翻译", scanner.Err())
 	emit(finish())
+}
+
+// logStreamInterrupted notes an upstream stream that ended before its terminator. By then
+// the client has already been handed a closing event, so a truncated answer would otherwise
+// look like the model simply stopped talking.
+func logStreamInterrupted(what string, err error) {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "%s 的上游流提前中断: %v\n", what, err)
 }
 
 // forwardError keeps the upstream's distinction between "credential is dead" and
@@ -553,5 +565,6 @@ func copyStreamed(w http.ResponseWriter, res *http.Response) {
 			flusher.Flush()
 		}
 	}
+	logStreamInterrupted("原样转发", scanner.Err())
 	flusher.Flush()
 }

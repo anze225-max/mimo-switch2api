@@ -14,7 +14,9 @@ import (
 type Resolver struct {
 	rules        []rule
 	defaultModel string
-	catalogue    map[string]bool
+	// catalogue keys a normalised name onto the exact id MiMo expects, so a client that
+	// types "MiMo V2.6 Pro" is rewritten rather than forwarded in a form upstream rejects.
+	catalogue map[string]string
 }
 
 type rule struct {
@@ -26,12 +28,12 @@ type rule struct {
 // aliases maps a normalised keyword to a catalogue id.
 func New(catalogue []string, aliases map[string]string, defaultModel string) *Resolver {
 	r := &Resolver{
-		catalogue:    map[string]bool{},
+		catalogue:    map[string]string{},
 		defaultModel: defaultModel,
 	}
 	for _, id := range catalogue {
 		if id != "" {
-			r.catalogue[Normalise(id)] = true
+			r.catalogue[Normalise(id)] = id
 		}
 	}
 	for keyword, target := range aliases {
@@ -67,8 +69,8 @@ func (r *Resolver) Resolve(incoming string) (target string, recognised bool) {
 	if norm == "" {
 		return r.defaultModel, false
 	}
-	if r.catalogue[norm] {
-		return incoming, true
+	if real, ok := r.catalogue[norm]; ok {
+		return real, true
 	}
 	for _, rule := range r.rules {
 		if strings.Contains(norm, rule.needle) {

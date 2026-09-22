@@ -27,9 +27,11 @@ type Usage struct {
 		Code    int    `json:"code"`
 		Message string `json:"message"`
 		Data    struct {
-			Percent    float64 `json:"percent"`
-			ResetDate  string  `json:"resetDate"`
-			ResetAtSec int64   `json:"resetAt"`
+			// Percent is a pointer so an absent field cannot read as "0% left", which the
+			// panel would render as a spent allowance.
+			Percent    *float64 `json:"percent"`
+			ResetDate  string   `json:"resetDate"`
+			ResetAtSec int64    `json:"resetAt"`
 		} `json:"data"`
 	}
 }
@@ -64,7 +66,10 @@ func Fetch(baseURL, cookie string) (*Usage, error) {
 	if u.raw.Code != 0 {
 		return nil, fmt.Errorf("额度接口返回 code=%d %s", u.raw.Code, u.raw.Message)
 	}
-	u.RemainingPercent = u.raw.Data.Percent
+	if u.raw.Data.Percent == nil {
+		return nil, fmt.Errorf("额度接口没有给出 percent (%s)", trim(string(body)))
+	}
+	u.RemainingPercent = *u.raw.Data.Percent
 	u.ResetDate = u.raw.Data.ResetDate
 	if u.raw.Data.ResetAtSec > 0 {
 		u.ResetAt = time.Unix(u.raw.Data.ResetAtSec, 0)
