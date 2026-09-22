@@ -115,8 +115,12 @@ func Refresh(m MasterCredential) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	setPassportHeaders(second, m)
-	secondRes, err := client.Do(second)
+	// Phase 2 travels without cookies: MiMo's own manager says so explicitly ("should NOT
+	// include Cookie header"), and sending the session makes passport answer 401. The jar is
+	// dropped as well, because Go would otherwise inject whatever Phase 1 set down this host.
+	second.Header.Set("User-Agent", passportUA)
+	cookieless := &http.Client{Timeout: 25 * time.Second}
+	secondRes, err := cookieless.Do(second)
 	if err != nil {
 		return nil, fmt.Errorf("Phase 2 请求失败: %w", err)
 	}
@@ -127,16 +131,6 @@ func Refresh(m MasterCredential) (*Session, error) {
 	for _, c := range secondRes.Cookies() {
 		if c.Name == "serviceToken" {
 			serviceToken = c.Value
-		}
-	}
-	if serviceToken == "" {
-		// Passport may have set it only on the jar.
-		if loc, err := url.Parse(phase1.Location); err == nil {
-			for _, c := range client.Jar.Cookies(loc) {
-				if c.Name == "serviceToken" {
-					serviceToken = c.Value
-				}
-			}
 		}
 	}
 	if serviceToken == "" {
