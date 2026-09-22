@@ -30,9 +30,9 @@ func DetachConsole() {
 		return
 	}
 	kernel32 := syscall.NewLazyDLL("kernel32.dll")
-	if proc := kernel32.NewProc("FreeConsole"); proc != nil {
-		_, _, _ = proc.Call()
-	}
+	// The call fails when no console is attached, which is the normal case for a
+	// GUI-subsystem build, so the status is not interesting.
+	_, _, _ = kernel32.NewProc("FreeConsole").Call()
 }
 
 // redirectLogsToFile keeps diagnostics available even though nothing is on screen.

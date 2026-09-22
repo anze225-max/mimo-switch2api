@@ -368,6 +368,34 @@ func TestMapStopReason(t *testing.T) {
 	}
 }
 
+// Some upstream chunks omit tool_call ids. Two parallel calls must not collide onto one id,
+// or the client cannot tell which tool_result answers which call.
+func TestCompletionToAnthropicIDsParallelToolCalls(t *testing.T) {
+	raw := `{"id":"cmpl-10","model":"mimo-v2.6-flash",
+	  "choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","content":null,
+	    "tool_calls":[{"type":"function","function":{"name":"read","arguments":"{}"}},
+	                   {"type":"function","function":{"name":"write","arguments":"{}"}}]}}]}`
+	out, err := CompletionToAnthropic([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var msg struct {
+		Content []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(out, &msg); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.Content) != 2 {
+		t.Fatalf("want 2 tool_use blocks, got %s", out)
+	}
+	if msg.Content[0].ID == msg.Content[1].ID {
+		t.Fatalf("both calls share id %q", msg.Content[0].ID)
+	}
+}
+
 func TestCompletionToAnthropicNonStreaming(t *testing.T) {
 	raw := `{"id":"cmpl-9","model":"mimo-v2.5-pro",
 	  "choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","content":null,

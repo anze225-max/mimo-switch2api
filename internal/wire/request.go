@@ -163,11 +163,10 @@ func AnthropicToOpenAI(body []byte) ([]byte, error) {
 // than dropped. Document blocks remain unsupported.
 func messageToOpenAI(role string, blocks []Block) []ChatMessage {
 	var (
-		text       strings.Builder
-		calls      []ChatToolCall
-		tools      []ChatMessage
-		images     []map[string]any
-		toolImages []map[string]any
+		text   strings.Builder
+		calls  []ChatToolCall
+		tools  []ChatMessage
+		images []map[string]any
 	)
 	for _, b := range blocks {
 		switch b.Type {
@@ -181,14 +180,13 @@ func messageToOpenAI(role string, blocks []Block) []ChatMessage {
 		case "tool_result":
 			body, pics := toolResultContent(b)
 			tools = append(tools, ChatMessage{Role: "tool", ToolCallID: b.ToolUseID, Content: body})
-			toolImages = append(toolImages, pics...)
+			images = append(images, pics...)
 		case "image":
 			if url, ok := imageURL(b.Source); ok {
 				images = append(images, map[string]any{"type": "image_url", "image_url": map[string]any{"url": url}})
 			}
 		}
 	}
-	images = append(images, toolImages...)
 
 	out := tools // tool results must land before any prose in the same turn
 	if len(calls) > 0 {
@@ -200,8 +198,8 @@ func messageToOpenAI(role string, blocks []Block) []ChatMessage {
 		}
 		return out
 	}
-	if len(toolImages) > 0 {
-		out = append(out, ChatMessage{Role: "user", Content: multimodalContent("", toolImages)})
+	if content := multimodalContent("", images); content != nil {
+		out = append(out, ChatMessage{Role: "user", Content: content})
 	}
 	return out
 }

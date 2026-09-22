@@ -337,13 +337,13 @@ func CompletionToAnthropic(raw []byte) ([]byte, error) {
 		if body := msg.Content.String(); body != "" {
 			blocks = append(blocks, map[string]any{"type": blockText, "text": body})
 		}
-		for _, tc := range msg.ToolCalls {
+		for i, tc := range msg.ToolCalls {
 			input := map[string]any{}
 			if tc.Function.Arguments != "" {
 				_ = json.Unmarshal([]byte(tc.Function.Arguments), &input)
 			}
 			blocks = append(blocks, map[string]any{
-				"type": blockToolUse, "id": toolUseID(tc.ID, 0), "name": tc.Function.Name, "input": input,
+				"type": blockToolUse, "id": toolUseID(tc.ID, i), "name": tc.Function.Name, "input": input,
 			})
 		}
 		reason = c.Choices[0].FinishReason
