@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 )
 
 const (
@@ -120,13 +121,31 @@ func RemoveStartMenu() error {
 	return firstErr
 }
 
-// SelfDelete removes dir once this process has exited. Windows will not let a running exe
-// delete its own image, so a detached command waits a moment and does it afterwards.
-func SelfDelete(dir string) error {
-	script := fmt.Sprintf("ping -n 4 127.0.0.1 >nul & rmdir /s /q %q", dir)
-	cmd := exec.Command("cmd", "/c", script)
-	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: detachedProcess | createNewProcessGroup}
-	return cmd.Start()
+// StashSelf moves the running executable out of dir and returns its new path. Windows
+// refuses to delete a loaded image but does allow renaming it, so stashing it unlocks the
+// folder for an immediate in-process delete — no detached helper, no shell quoting.
+func StashSelf(dir string) (string, error) {
+	self, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	staged := filepath.Join(os.TempDir(), exeName+".uninstall-"+fmt.Sprint(time.Now().UnixNano()))
+	if err := os.Rename(self, staged); err != nil {
+		return "", fmt.Errorf("挪出运行中的程序失败: %w", err)
+	}
+	return staged, nil
+}
+
+// SweepStale deletes executables left behind by an earlier uninstall. Temp files can still
+// be locked when we try, so failures are ignored and retried on the next launch.
+func SweepStale() {
+	matches, err := filepath.Glob(filepath.Join(os.TempDir(), exeName+".uninstall-*"))
+	if err != nil {
+		return
+	}
+	for _, path := range matches {
+		_ = os.Remove(path)
+	}
 }
 
 // RunningFromTarget reports whether this process lives inside dir, which is the only case

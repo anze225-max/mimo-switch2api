@@ -28,6 +28,7 @@ import (
 func main() {
 	flag.Usage = printUsage
 	flag.Parse()
+	install.SweepStale() // tidy up after an earlier uninstall that could not delete the loaded image
 	if err := run(flag.Args()); err != nil {
 		fmt.Fprintln(os.Stderr, "错误:", err)
 		if isInstalledBuild() {
@@ -449,13 +450,18 @@ func cmdUninstall(args []string) error {
 			}
 		}
 	}
+	// The running image cannot be deleted, but it can be renamed: stashing it in the temp
+	// directory unlocks the folder so the delete happens right here, and the stashed file is
+	// swept on the next launch.
 	if install.RunningFromTarget(dir) {
-		if err := install.SelfDelete(dir); err != nil {
-			return fmt.Errorf("安排删除程序目录失败: %w", err)
+		if _, err := install.StashSelf(dir); err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
 		}
-		fmt.Println("程序目录将在本进程退出后删除。")
-	} else if err := os.RemoveAll(dir); err != nil {
+	}
+	if err := os.RemoveAll(dir); err != nil {
 		fmt.Fprintf(os.Stderr, "删除程序目录失败: %v\n", err)
+	} else {
+		fmt.Println("程序目录已删除。")
 	}
 	fmt.Println("卸载完成。")
 	if isInstalledBuild() {
