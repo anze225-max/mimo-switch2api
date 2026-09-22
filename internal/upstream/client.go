@@ -40,7 +40,21 @@ func NewCookie(cookieHeader, baseURL string) *Client {
 	return c
 }
 
-func (c *Client) BaseURL() string { return c.baseURL }
+func (c *Client) BaseURL() string { return c.currentBaseURL() }
+
+// SetBaseURL repoints the client, used when a desktop session replaces a platform key.
+// Requests already in flight keep the URL they were built with.
+func (c *Client) SetBaseURL(url string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.baseURL = strings.TrimRight(url, "/")
+}
+
+func (c *Client) currentBaseURL() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.baseURL
+}
 
 // SetCookie swaps the session cookie after a silent renewal. It is guarded because the
 // proxy serves concurrent requests while a refresh can be in flight.
@@ -90,7 +104,7 @@ func (c *Client) Post(ctx context.Context, path string, body any) (*http.Respons
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(encoded))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.currentBaseURL()+path, bytes.NewReader(encoded))
 	if err != nil {
 		return nil, err
 	}
@@ -100,7 +114,7 @@ func (c *Client) Post(ctx context.Context, path string, body any) (*http.Respons
 }
 
 func (c *Client) Get(ctx context.Context, path string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.currentBaseURL()+path, nil)
 	if err != nil {
 		return nil, err
 	}

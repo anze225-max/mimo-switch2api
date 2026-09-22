@@ -33,11 +33,14 @@ type Server struct {
 	tracker      *usage.Tracker
 	startedAt    time.Time
 
-	// sessionMu guards the live credential and catalogue. Renewal publishes copies rather
-	// than mutating them, so a handler can never read a half-written string or slice header.
-	sessionMu sync.RWMutex
-	cred      *store.Credential
-	modelList []usage.CatalogModel
+	// sessionMu guards the live credential, catalogue and model resolver. Renewal publishes
+	// copies rather than mutating them, so a handler can never read a half-written string or
+	// slice header.
+	sessionMu     sync.RWMutex
+	cred          *store.Credential
+	modelList     []usage.CatalogModel
+	aliases       map[string]string
+	resolverValue *modelmap.Resolver
 
 	refreshLock sync.Mutex
 	refreshedAt time.Time
@@ -47,10 +50,15 @@ type Server struct {
 	quotaAt       time.Time
 	quotaFetching bool
 
-	resolver *modelmap.Resolver
-
 	// relogin overrides the renewal path; nil means use MiMo's passport flow.
 	relogin relogin
+
+	// verify overrides the "does this session work" probe; nil means ask MiMo.
+	verify desktopVerify
+
+	// desktopBase is the desktop endpoint a session is adopted into. It is a field rather
+	// than the package constant so tests never send traffic off the machine.
+	desktopBase string
 }
 
 // quotaTTL bounds how often the panel can refresh the allowance from MiMo.
@@ -84,12 +92,30 @@ func New(cfg *store.Config) (*Server, error) {
 		modelList:    models,
 	}
 	s.pinModel()
-	aliases := cfg.ModelAliases
-	if len(aliases) == 0 {
-		aliases = modelmap.DefaultAliases()
+	s.aliases = cfg.ModelAliases
+	if len(s.aliases) == 0 {
+		s.aliases = modelmap.DefaultAliases()
 	}
-	s.resolver = modelmap.New(s.catalogIDs(), aliases, s.credential().Model)
+	s.rebuildResolver()
 	return s, nil
+}
+
+// resolver maps the model labels clients send onto real MiMo models. It is rebuilt whenever
+// the session or catalogue changes, because its fallback is the current default model.
+func (s *Server) resolver() *modelmap.Resolver {
+	s.sessionMu.RLock()
+	defer s.sessionMu.RUnlock()
+	return s.resolverValue
+}
+
+func (s *Server) rebuildResolver() {
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+	ids := make([]string, 0, len(s.modelList))
+	for _, m := range s.modelList {
+		ids = append(ids, m.ID)
+	}
+	s.resolverValue = modelmap.New(ids, s.aliases, s.cred.Model)
 }
 
 // credential returns the live session. Treat the result as read-only: renewal swaps in a
@@ -280,7 +306,7 @@ func (s *Server) desktopModels() []map[string]any {
 // mapped through the alias table; anything unmapped falls back to the default and is
 // recorded so the mapping can be made explicit.
 func (s *Server) rewriteModel(body []byte) []byte {
-	if s.credential().Kind != store.KindDesktop || s.resolver == nil {
+	if s.credential().Kind != store.KindDesktop || s.resolver() == nil {
 		return body
 	}
 	var probe struct {
@@ -289,7 +315,7 @@ func (s *Server) rewriteModel(body []byte) []byte {
 	if err := json.Unmarshal(body, &probe); err != nil || probe.Model == "" {
 		return body
 	}
-	target, recognised := s.resolver.Resolve(probe.Model)
+	target, recognised := s.resolver().Resolve(probe.Model)
 	s.tracker.RecordModelName(probe.Model, recognised)
 	if target == probe.Model {
 		return body

@@ -58,9 +58,11 @@ func newTestServer(baseURL string, cred *store.Credential, relogin relogin) *Ser
 	return &Server{
 		client: upstream.NewCookie(cred.Cookie, baseURL),
 		cred:   cred,
-		// cfg stays nil so a renewal cannot touch the real on-disk config.
-		tracker: usage.NewTracker(nil),
-		relogin: relogin,
+		// cfg stays nil so a renewal cannot touch the real on-disk config; desktopBase
+		// keeps an adopted session pointed at the test server instead of at MiMo.
+		desktopBase: baseURL,
+		tracker:     usage.NewTracker(nil),
+		relogin:     relogin,
 	}
 }
 
