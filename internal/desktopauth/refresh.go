@@ -32,9 +32,17 @@ type MasterCredential struct {
 	UserID    string
 	CUserId   string
 	SID       string
+	// SessionCookies is the whole jar the sign-in window ended with, as a Cookie header.
+	// Passport sets more than the three names above (sgn, bav, ssecurity, …), and Phase 1
+	// answers 70016 when it does not see them. Empty for the silent-renewal path, which
+	// only ever stored the master trio and provably works without the rest.
+	SessionCookies string
 }
 
 func (m MasterCredential) cookieHeader() string {
+	if m.SessionCookies != "" {
+		return m.SessionCookies
+	}
 	parts := []string{"userId=" + m.UserID, "passToken=" + m.PassToken}
 	if m.CUserId != "" {
 		parts = append(parts, "cUserId="+m.CUserId)

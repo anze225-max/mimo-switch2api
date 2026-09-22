@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -20,7 +21,7 @@ import (
 
 // loginURL is the address MiMo's own sign-in window loads. With no session it renders
 // passport's login page; completing that page puts passToken on .xiaomi.com.
-const loginURL = "https://account.xiaomi.com/pass/serviceLogin?sid=passport"
+const loginURL = "https://account.xiaomi.com/pass/serviceLogin?sid=mimopc&_locale=zh_CN"
 
 // DefaultTimeout is generous: signing in usually means fumbling for a phone to scan a QR.
 const DefaultTimeout = 5 * time.Minute
@@ -94,7 +95,13 @@ func (s *Session) Wait(ctx context.Context) (*desktopauth.Session, error) {
 		case err != nil:
 			lastErr = err
 		case master.PassToken != "" && master.UserID != "":
-			return desktopauth.Refresh(*master)
+			session, err := desktopauth.Refresh(*master)
+			if err != nil {
+				// The cookie names (never values) are what distinguishes "logged in" from
+				// "logged in with the wrong passport context", so report them.
+				return nil, fmt.Errorf("%w（窗口里的 Cookie：%s）", err, jarNames(master.SessionCookies))
+			}
+			return session, nil
 		default:
 			lastErr = nil // a clean read with no passToken just means: still waiting
 		}
@@ -148,11 +155,13 @@ func parsePassportCookies(raw json.RawMessage) (*desktopauth.MasterCredential, e
 		return nil, fmt.Errorf("解析登录窗口的 Cookie: %w", err)
 	}
 	master := &desktopauth.MasterCredential{SID: desktopauth.DefaultSID}
+	jar := map[string]string{}
 	for _, c := range reply.Cookies {
 		v := strings.TrimSpace(c.Value)
 		if v == "" {
 			continue
 		}
+		jar[c.Name] = v // the window's latest value for a name wins
 		switch c.Name {
 		case "passToken":
 			master.PassToken = v
@@ -166,6 +175,12 @@ func parsePassportCookies(raw json.RawMessage) (*desktopauth.MasterCredential, e
 			}
 		}
 	}
+	parts := make([]string, 0, len(jar))
+	for name, v := range jar {
+		parts = append(parts, name+"="+v)
+	}
+	sort.Strings(parts)
+	master.SessionCookies = strings.Join(parts, "; ")
 	return master, nil
 }
 
@@ -206,4 +221,16 @@ func freePort() (int, error) {
 	}
 	defer ln.Close()
 	return ln.Addr().(*net.TCPAddr).Port, nil
+}
+
+// jarNames lists cookie names from a Cookie header, for diagnostics only: values never
+// reach the log.
+func jarNames(header string) string {
+	var names []string
+	for _, part := range strings.Split(header, "; ") {
+		if i := strings.IndexByte(part, '='); i > 0 {
+			names = append(names, part[:i])
+		}
+	}
+	return strings.Join(names, ",")
 }
