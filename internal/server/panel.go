@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"mimo-switch/internal/quota"
 	"mimo-switch/internal/store"
 	"mimo-switch/internal/usage"
 )
@@ -54,7 +55,34 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"uptime_s":      int(time.Since(s.startedAt).Seconds()),
 		"usage":         snap,
 		"models":        s.panelModels(),
+		"quota":         s.quotaStatus(),
 	})
+}
+
+// quotaStatus returns the live desktop allowance, cached briefly so refreshing the panel
+// cannot hammer MiMo's endpoint. A failure is reported as text rather than hidden, because
+// a missing number is itself information the user needs.
+func (s *Server) quotaStatus() map[string]any {
+	if s.credential.Kind != store.KindDesktop {
+		return map[string]any{"available": false, "note": "非桌面端会话，无此额度接口"}
+	}
+	s.quotaMu.Lock()
+	defer s.quotaMu.Unlock()
+	if s.quotaValue != nil && time.Since(s.quotaAt) < quotaTTL {
+		return map[string]any{
+			"available": true, "remaining_percent": s.quotaValue.RemainingPercent,
+			"reset_date": s.quotaValue.ResetDate, "cached": true,
+		}
+	}
+	u, err := quota.Fetch(s.credential.BaseURL, s.credential.Cookie)
+	if err != nil {
+		return map[string]any{"available": false, "note": err.Error()}
+	}
+	s.quotaValue, s.quotaAt = u, time.Now()
+	return map[string]any{
+		"available": true, "remaining_percent": u.RemainingPercent,
+		"reset_date": u.ResetDate,
+	}
 }
 
 // panelModels reports the live catalogue with ratios, so the panel reflects a MiMo update

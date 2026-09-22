@@ -20,10 +20,7 @@ import (
 )
 
 // Endpoint the desktop's own chat traffic uses. It speaks OpenAI's chat/completions shape.
-const (
-	BaseURL    = "https://mimo-server-cn.xiaomimimo.com/api/route"
-	ExportName = "xiaomi-session-cookies.json"
-)
+const BaseURL = "https://mimo-server-cn.xiaomimimo.com/api/route"
 
 // Session is the replayable credential.
 type Session struct {
@@ -139,22 +136,7 @@ func HarvestLive(port int) (*Session, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	if err := writeExport(raw); err != nil {
-		return nil, "", err
-	}
 	return session, raw, nil
-}
-
-// writeExport keeps the raw jar for debugging and for re-verifying without MiMo running.
-func writeExport(raw string) error {
-	path, err := ExportPath()
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	return os.WriteFile(path, []byte(raw), 0o600)
 }
 
 // Verify confirms the session really reaches the model and reports which one worked.
@@ -196,13 +178,13 @@ func (s *Session) Verify(candidates ...string) (string, error) {
 	return "", fmt.Errorf("会话未被任何模型接受（serviceToken 可能已过期，请在 MiMo 重新登录后 harvest）：%w", lastErr)
 }
 
-// ExportPath is the default drop location for a harvest run.
+// ExportPath is where a manual cookie export is expected, for --file.
 func ExportPath() (string, error) {
 	base, err := os.UserConfigDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(base, "mimo-switch", ExportName), nil
+	return filepath.Join(base, "mimo-switch", "xiaomi-session-cookies.json"), nil
 }
 
 func trim(s string) string {

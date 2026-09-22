@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"mimo-switch/internal/quota"
 	"mimo-switch/internal/store"
 	"mimo-switch/internal/upstream"
 	"mimo-switch/internal/usage"
@@ -36,9 +37,16 @@ type Server struct {
 	refreshLock sync.Mutex
 	refreshedAt time.Time
 
+	quotaMu    sync.Mutex
+	quotaValue *quota.Usage
+	quotaAt    time.Time
+
 	// relogin overrides the renewal path; nil means use MiMo's passport flow.
 	relogin relogin
 }
+
+// quotaTTL bounds how often the panel can refresh the allowance from MiMo.
+const quotaTTL = 60 * time.Second
 
 func New(cfg *store.Config) (*Server, error) {
 	cred := cfg.Credential()

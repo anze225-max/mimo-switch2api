@@ -28,6 +28,8 @@
   button:hover { background: #3182ce; }
   .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
   .note { color: #8b93a1; font-size: 12px; }
+  .bar-wrap { height: 6px; background: #262a32; border-radius: 4px; overflow: hidden; margin: -6px 0 18px; }
+  .bar { height: 100%; width: 0; background: #5fd39a; transition: width .4s ease, background .4s ease; }
 </style>
 </head>
 <body>
@@ -37,9 +39,11 @@
   <div class="grid">
     <div class="card"><div class="k">状态</div><div class="v" id="status">…</div></div>
     <div class="card"><div class="k">额度来源</div><div class="v" id="plan">…</div></div>
-    <div class="card"><div class="k">上游</div><div class="v" id="upstream" style="font-size:13px">…</div></div>
+    <div class="card"><div class="k">剩余用量</div><div class="v" id="remaining">…</div><div class="note" id="reset"></div></div>
     <div class="card"><div class="k">已用额度单位</div><div class="v" id="units">…</div><div class="note">按倍率折算</div></div>
   </div>
+
+  <div class="bar-wrap"><div class="bar" id="bar"></div></div>
 
   <section>
     <div class="row">
@@ -78,8 +82,21 @@ async function load(){
   const r = await fetch('/api/status'); const s = await r.json();
   put('status', s.healthy ? '运行中' : '异常', s.healthy ? 'ok' : 'bad');
   put('plan', s.plan_label || s.plan);
-  put('upstream', s.upstream);
   put('units', fmt(s.usage.weighted_units));
+
+  const q = s.quota || {};
+  if (q.available) {
+    const r = q.remaining_percent;
+    put('remaining', r.toFixed(1) + '%', r < 10 ? 'bad' : r < 30 ? 'warn' : 'ok');
+    put('reset', '重置 ' + (q.reset_date || '—'));
+    const bar = document.getElementById('bar');
+    bar.style.width = Math.max(0, Math.min(100, r)) + '%';
+    bar.style.background = r < 10 ? '#f0776b' : r < 30 ? '#f0b45c' : '#5fd39a';
+  } else {
+    put('remaining', '不可用', 'warn');
+    put('reset', q.note || '');
+    document.getElementById('bar').style.width = '0%';
+  }
 
   const base = 'http://' + s.listen + '/v1';
   put('base', base); put('token', s.require_token ? s.local_token : '（未启用本地令牌）');
