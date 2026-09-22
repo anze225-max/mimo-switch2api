@@ -112,8 +112,9 @@ func path() (string, error) {
 	return filepath.Join(dir, "config.json"), nil
 }
 
-// Load returns the config, creating an in-memory default with a fresh local token
-// when none exists yet. Saving is the caller's decision.
+// Load reads the config, creating it on first use. A config that predates the local token
+// gets a fresh one written back immediately: the guard has nothing to check against an empty
+// token, and minting without saving would hand the user a new token on every restart.
 func Load() (*Config, error) {
 	p, err := path()
 	if err != nil {
@@ -121,32 +122,37 @@ func Load() (*Config, error) {
 	}
 	cfg := &Config{Listen: "127.0.0.1:7864", RequireToken: true}
 	raw, err := os.ReadFile(p)
-	if os.IsNotExist(err) {
+	switch {
+	case os.IsNotExist(err):
+	case err != nil:
+		return nil, err
+	default:
+		if err := json.Unmarshal(raw, cfg); err != nil {
+			return nil, fmt.Errorf("parse %s: %w", p, err)
+		}
+		if cfg.Protected != "" {
+			blob, err := base64.StdEncoding.DecodeString(cfg.Protected)
+			if err != nil {
+				return nil, fmt.Errorf("credential blob: %w", err)
+			}
+			plain, err := unprotect(blob)
+			if err != nil {
+				return nil, fmt.Errorf("unlock credential (re-run authorize if this machine changed user): %w", err)
+			}
+			var c Credential
+			if err := json.Unmarshal(plain, &c); err != nil {
+				return nil, fmt.Errorf("credential json: %w", err)
+			}
+			cfg.cred = &c
+		}
+	}
+	if cfg.RequireToken && cfg.LocalToken == "" {
 		if cfg.LocalToken, err = randomToken(); err != nil {
 			return nil, err
 		}
-		return cfg, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	if err := json.Unmarshal(raw, cfg); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", p, err)
-	}
-	if cfg.Protected != "" {
-		blob, err := base64.StdEncoding.DecodeString(cfg.Protected)
-		if err != nil {
-			return nil, fmt.Errorf("credential blob: %w", err)
+		if err := cfg.Save(); err != nil {
+			return nil, err
 		}
-		plain, err := unprotect(blob)
-		if err != nil {
-			return nil, fmt.Errorf("unlock credential (re-run authorize if this machine changed user): %w", err)
-		}
-		var c Credential
-		if err := json.Unmarshal(plain, &c); err != nil {
-			return nil, fmt.Errorf("credential json: %w", err)
-		}
-		cfg.cred = &c
 	}
 	return cfg, nil
 }

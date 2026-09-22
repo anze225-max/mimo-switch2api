@@ -165,6 +165,10 @@ func (s *Server) guard(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) tokenAccepted(r *http.Request) bool {
+	if s.localToken == "" {
+		// Fail closed: comparing two empty strings succeeds, which would admit any caller.
+		return false
+	}
 	provided := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if provided == "" {
 		// Claude Code and some SDKs also honour an x-api-key header.
