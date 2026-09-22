@@ -16,10 +16,11 @@ import (
 	"mimo-switch/internal/store"
 	"mimo-switch/internal/tray"
 	"mimo-switch/internal/upstream"
+	"mimo-switch/internal/usage"
 )
 
 func main() {
-	flag.Usage = usage
+	flag.Usage = printUsage
 	flag.Parse()
 	if err := run(flag.Args()); err != nil {
 		fmt.Fprintln(os.Stderr, "错误:", err)
@@ -27,7 +28,7 @@ func main() {
 	}
 }
 
-func usage() {
+func printUsage() {
 	fmt.Fprint(os.Stderr, `mimo-switch — 把 MiMo 免费额度暴露成本地 OpenAI/Anthropic 端点
 
 用法:
@@ -43,7 +44,7 @@ func usage() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		usage()
+		printUsage()
 		return fmt.Errorf("缺少子命令")
 	}
 	switch args[0] {
@@ -64,7 +65,7 @@ func run(args []string) error {
 	case "autostart":
 		return cmdAutostart(args[1:])
 	default:
-		usage()
+		printUsage()
 		return fmt.Errorf("未知子命令 %q", args[0])
 	}
 }
@@ -294,7 +295,13 @@ func cmdHarvest(args []string) error {
 		}
 	}
 
-	model, err := session.Verify()
+	// Verify against the models MiMo currently advertises, not a hardcoded list.
+	catalog, _ := usage.LoadTextModels()
+	candidates := make([]string, 0, len(catalog))
+	for _, m := range catalog {
+		candidates = append(candidates, m.ID)
+	}
+	model, err := session.Verify(candidates...)
 	if err != nil {
 		return err
 	}

@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -28,6 +29,7 @@ type Server struct {
 	requireToken bool
 	tracker      *usage.Tracker
 	startedAt    time.Time
+	models       []usage.CatalogModel
 }
 
 func New(cfg *store.Config) (*Server, error) {
@@ -39,15 +41,42 @@ func New(cfg *store.Config) (*Server, error) {
 	if cred.Kind == store.KindDesktop {
 		client = upstream.NewCookie(cred.Cookie, cred.BaseURL)
 	}
-	return &Server{
+
+	// MiMo renames its models on every generation (x-preview → v2.6), so the catalogue is
+	// read from the app's own cache rather than hardcoded.
+	models, err := usage.LoadTextModels()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "读不到 MiMo 模型目录，沿用内置倍率: %v\n", err)
+	}
+	s := &Server{
 		client:       client,
 		credential:   cred,
 		listen:       cfg.Listen,
 		localToken:   cfg.LocalToken,
 		requireToken: cfg.RequireToken,
-		tracker:      usage.NewTracker(),
+		tracker:      usage.NewTracker(models),
 		startedAt:    time.Now(),
-	}, nil
+		models:       models,
+	}
+	s.pinModel()
+	return s, nil
+}
+
+// pinModel drops a stored default that the current catalogue no longer offers, so clients
+// asking for an unknown model are not sent a stale name.
+func (s *Server) pinModel() {
+	if len(s.models) == 0 {
+		return
+	}
+	for _, m := range s.models {
+		if m.ID == s.credential.Model {
+			return
+		}
+	}
+	if preferred := usage.PreferredModel(s.models); preferred != "" {
+		fmt.Fprintf(os.Stderr, "凭证里的模型 %q 已不在目录中，改用 %q\n", s.credential.Model, preferred)
+		s.credential.Model = preferred
+	}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -157,7 +186,12 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 func (s *Server) desktopModels() []map[string]any {
 	seen := map[string]bool{}
 	out := []map[string]any{}
-	for _, id := range append([]string{s.credential.Model}, desktopTextModels...) {
+	ids := make([]string, 0, len(s.models)+1)
+	ids = append(ids, s.credential.Model)
+	for _, m := range s.models {
+		ids = append(ids, m.ID)
+	}
+	for _, id := range ids {
 		if id == "" || seen[id] {
 			continue
 		}
@@ -169,10 +203,6 @@ func (s *Server) desktopModels() []map[string]any {
 	}
 	return out
 }
-
-// desktopTextModels mirrors the desktop catalogue, so clients that validate a model name
-// before their first request still work.
-var desktopTextModels = []string{"mimo-x-pro-preview", "mimo-x-flash-preview"}
 
 // rewriteModel pins the upstream model for the desktop broker. Clients like Claude Code
 // send their own model names, which mimo-server rejects, so anything unknown becomes the
@@ -187,7 +217,7 @@ func (s *Server) rewriteModel(body []byte) []byte {
 	if err := json.Unmarshal(body, &probe); err != nil || probe.Model == "" {
 		return body
 	}
-	for _, known := range append([]string{s.credential.Model}, desktopTextModels...) {
+	for _, known := range s.desktopModelIDs() {
 		if probe.Model == known {
 			return body
 		}
@@ -202,6 +232,15 @@ func (s *Server) rewriteModel(body []byte) []byte {
 		return body
 	}
 	return out
+}
+
+func (s *Server) desktopModelIDs() []string {
+	ids := make([]string, 0, len(s.models)+1)
+	ids = append(ids, s.credential.Model)
+	for _, m := range s.models {
+		ids = append(ids, m.ID)
+	}
+	return ids
 }
 
 // handleChat is a faithful passthrough: the upstream already speaks OpenAI, so the only

@@ -136,11 +136,15 @@ func writeExport(raw string) error {
 	return os.WriteFile(path, []byte(raw), 0o600)
 }
 
-// Verify confirms the session really reaches the model, and reports the model id to use.
-// It is deliberately the only network call in this package.
-func (s *Session) Verify() (string, error) {
-	client := &http.Client{Timeout: 30 * time.Second}
-	for _, model := range []string{"mimo-x-pro-preview", "mimo-x-flash-preview"} {
+// Verify confirms the session really reaches the model and reports which one worked.
+// Candidates come from MiMo's live catalogue, since model ids change with each generation.
+func (s *Session) Verify(candidates ...string) (string, error) {
+	if len(candidates) == 0 {
+		candidates = []string{"mimo-v2.6-pro", "mimo-v2.6-flash"}
+	}
+	client := &http.Client{Timeout: 40 * time.Second}
+	var lastErr error
+	for _, model := range candidates {
 		payload := `{"model":"` + model + `","max_tokens":8,"messages":[{"role":"user","content":"Reply with exactly: OK"}]}`
 		req, err := http.NewRequest(http.MethodPost, BaseURL+"/chat/completions", strings.NewReader(payload))
 		if err != nil {
@@ -150,7 +154,8 @@ func (s *Session) Verify() (string, error) {
 		req.Header.Set("cookie", s.CookieHeader())
 		res, err := client.Do(req)
 		if err != nil {
-			return "", fmt.Errorf("探测 %s: %w", model, err)
+			lastErr = err
+			continue
 		}
 		body, _ := io.ReadAll(io.LimitReader(res.Body, 600))
 		res.Body.Close()
@@ -158,11 +163,16 @@ func (s *Session) Verify() (string, error) {
 			s.Model = model
 			return model, nil
 		}
-		if res.StatusCode != http.StatusUnauthorized && res.StatusCode != http.StatusForbidden {
-			return "", fmt.Errorf("%s -> HTTP %d %s", model, res.StatusCode, trim(string(body)))
+		lastErr = fmt.Errorf("%s -> HTTP %d %s", model, res.StatusCode, trim(string(body)))
+		// A non-auth failure means this model is wrong, not the session; keep trying.
+		if res.StatusCode != http.StatusNotFound && res.StatusCode != http.StatusBadRequest {
+			return "", lastErr
 		}
 	}
-	return "", fmt.Errorf("serviceToken 被拒绝（可能已过期，请在 MiMo 里重新登录后再 harvest）")
+	if lastErr == nil {
+		lastErr = fmt.Errorf("没有可用模型")
+	}
+	return "", fmt.Errorf("会话未被任何模型接受（serviceToken 可能已过期，请在 MiMo 重新登录后 harvest）：%w", lastErr)
 }
 
 // ExportPath is the default drop location for a harvest run.

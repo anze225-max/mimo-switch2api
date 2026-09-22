@@ -53,8 +53,18 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"issued_at":     s.credential.IssuedAt,
 		"uptime_s":      int(time.Since(s.startedAt).Seconds()),
 		"usage":         snap,
-		"models":        usage.Models(),
+		"models":        s.panelModels(),
 	})
+}
+
+// panelModels reports the live catalogue with ratios, so the panel reflects a MiMo update
+// without a code change.
+func (s *Server) panelModels() []usage.Model {
+	out := make([]usage.Model, 0, len(s.models))
+	for _, m := range s.models {
+		out = append(out, usage.Model{ID: m.ID, Multiplier: m.Ratio})
+	}
+	return out
 }
 
 // modelOrDefault keeps the panel's copy-paste snippets usable even before a harvest has
@@ -63,5 +73,5 @@ func (s *Server) modelOrDefault() string {
 	if s.credential.Model != "" {
 		return s.credential.Model
 	}
-	return "mimo-x-pro-preview"
+	return usage.PreferredModel(s.models)
 }
