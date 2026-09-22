@@ -14,10 +14,12 @@ import (
 	"time"
 )
 
-// Xiaomi passport SSO, transcribed from the desktop app's ServiceTokenManager so the tool
-// can renew serviceToken itself once the desktop session goes stale.
+// passportStep1 is a var only so tests can point the exchange at a local server; it is
+// otherwise Xiaomi's fixed endpoint, transcribed from the desktop app's ServiceTokenManager
+// so the tool can renew serviceToken itself once the desktop session goes stale.
+var passportStep1 = "https://account.xiaomi.com/pass/serviceLogin"
+
 const (
-	passportStep1 = "https://account.xiaomi.com/pass/serviceLogin"
 	// DefaultSID is the service id MiMo desktop registers with passport; the login surface
 	// observed on this machine used "mimopc".
 	DefaultSID    = "mimopc"
