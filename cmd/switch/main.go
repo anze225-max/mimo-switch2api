@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"time"
@@ -326,22 +327,50 @@ func cmdHarvest(args []string) error {
 	return adopt(session, "已接管 MiMo 桌面端免费额度会话")
 }
 
-// cmdTray is what a double-click gives you: sign in first if there is no credential yet,
-// then run the proxy with a tray icon.
+// cmdTray is what a double-click gives you. If an instance already serves the port, open
+// its panel instead of failing to bind; otherwise sign in when needed and run the tray.
 func cmdTray() error {
-	if err := ensureCredential(); err != nil {
+	cfg, err := store.Load()
+	if err != nil {
+		return err
+	}
+	if running := existingInstance(cfg.Listen); running != "" {
+		fmt.Printf("已有一个 MiMo Switch 在运行（%s），为你打开主界面。\n", running)
+		tray.OpenURL("http://" + running + "/")
+		return nil
+	}
+	if err := ensureCredential(cfg); err != nil {
 		return err
 	}
 	return tray.Run()
 }
 
+// existingInstance returns the address of a MiMo Switch that already answers /health there,
+// or "" when the port is free. Only our own payload counts, so an unrelated program holding
+// the port still produces the bind error rather than a silent exit.
+func existingInstance(listen string) string {
+	client := &http.Client{Timeout: 1500 * time.Millisecond}
+	res, err := client.Get("http://" + listen + "/health")
+	if err != nil {
+		return ""
+	}
+	defer res.Body.Close()
+	var health struct {
+		Status   string `json:"status"`
+		Upstream string `json:"upstream"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&health); err != nil {
+		return ""
+	}
+	if health.Status == "ok" && health.Upstream != "" {
+		return listen
+	}
+	return ""
+}
+
 // ensureCredential obtains a session on first run. MiMo never has to be installed or open:
 // the window we open is Xiaomi's own passport page, and we read only that window's cookie.
-func ensureCredential() error {
-	cfg, err := store.Load()
-	if err != nil {
-		return err
-	}
+func ensureCredential(cfg *store.Config) error {
 	if cfg.Credential() != nil {
 		return nil
 	}

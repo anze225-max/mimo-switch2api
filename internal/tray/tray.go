@@ -151,6 +151,9 @@ func ready(srv *server.Server, cfg *store.Config, cancel context.CancelFunc, ser
 	}()
 }
 
+// OpenURL shows an address in the user's default browser.
+func OpenURL(url string) { openInBrowser(url) }
+
 func openInBrowser(url string) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
