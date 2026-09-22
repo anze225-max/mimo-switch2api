@@ -51,6 +51,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"require_token": s.requireToken,
 		"local_token":   s.localToken,
 		"credential":    s.credential().Masked(),
+		"credential_fp": s.credential().Fingerprint(),
 		"issued_at":     s.credential().IssuedAt,
 		"uptime_s":      int(time.Since(s.startedAt).Seconds()),
 		"usage":         snap,

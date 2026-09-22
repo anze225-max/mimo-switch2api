@@ -35,12 +35,14 @@
 <body>
   <h1>MiMo Switch</h1>
   <div class="sub">把 MiMo 桌面端的免费额度暴露成本地 OpenAI / Anthropic / Responses 端点</div>
+  <div class="note" id="banner" style="min-height:16px"></div>
 
   <div class="grid">
     <div class="card"><div class="k">状态</div><div class="v" id="status">…</div></div>
     <div class="card"><div class="k">额度来源</div><div class="v" id="plan">…</div></div>
     <div class="card"><div class="k">剩余用量</div><div class="v" id="remaining">…</div><div class="note" id="reset"></div></div>
     <div class="card"><div class="k">已用额度单位</div><div class="v" id="units">…</div><div class="note">按倍率折算</div></div>
+    <div class="card"><div class="k">会话</div><div class="v" id="session">…</div><div class="note" id="session_note"></div></div>
   </div>
 
   <div class="bar-wrap"><div class="bar" id="bar"></div></div>
@@ -52,6 +54,7 @@
     </div>
     <table id="usage"><tr><th>模型</th><th>请求</th><th>倍率</th><th>额度单位(k tokens×倍率)</th></tr></table>
     <div class="note" id="totals"></div>
+    <div class="note" id="names"></div>
   </section>
 
   <section>
@@ -76,30 +79,54 @@
 
 <script>
 function fmt(n){ return (Math.round(n*1000)/1000).toLocaleString('zh-CN'); }
-function put(id, text, cls){ const e = document.getElementById(id); e.textContent = text; if(cls) e.className = 'v '+cls; }
+function put(id, text, cls){
+  const e = document.getElementById(id);
+  e.textContent = text;
+  if (cls !== undefined) e.className = (e.className.split(' ')[0] === 'note' ? 'note ' : 'v ') + (cls || '');
+}
+function banner(text, cls){ put('banner', text, cls); }
 
 async function load(){
-  const r = await fetch('/api/status'); const s = await r.json();
+  let s;
+  try {
+    const r = await fetch('/api/status');
+    s = await r.json();
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+  } catch (e) {
+    // Keep the last good render on screen; a transient failure should not blank the page.
+    put('status', '连接失败', 'bad');
+    banner('读取 /api/status 失败：' + e.message + '（反代可能正在重启）', 'bad');
+    return;
+  }
+
   put('status', s.healthy ? '运行中' : '异常', s.healthy ? 'ok' : 'bad');
   put('plan', s.plan_label || s.plan);
   put('units', fmt(s.usage.weighted_units));
+  put('session', s.desktop ? '桌面端' : '平台 key');
+  put('session_note', '签发 ' + new Date(s.issued_at).toLocaleString('zh-CN') +
+      ' · 指纹 ' + (s.credential_fp || '—') + ' · 已运行 ' + Math.round(s.uptime_s / 60) + ' 分钟');
 
   const q = s.quota || {};
+  const bar = document.getElementById('bar');
   if (q.available) {
-    const r = q.remaining_percent;
-    put('remaining', r.toFixed(1) + '%', r < 10 ? 'bad' : r < 30 ? 'warn' : 'ok');
-    put('reset', '重置 ' + (q.reset_date || '—'));
-    const bar = document.getElementById('bar');
-    bar.style.width = Math.max(0, Math.min(100, r)) + '%';
-    bar.style.background = r < 10 ? '#f0776b' : r < 30 ? '#f0b45c' : '#5fd39a';
+    const pct = q.remaining_percent;
+    put('remaining', pct.toFixed(1) + '%', pct < 10 ? 'bad' : pct < 30 ? 'warn' : 'ok');
+    put('reset', '重置 ' + (q.reset_date || '—') + (q.note ? ' · ' + q.note : ''));
+    bar.style.width = Math.max(0, Math.min(100, pct)) + '%';
+    bar.style.background = pct < 10 ? '#f0776b' : pct < 30 ? '#f0b45c' : '#5fd39a';
   } else {
     put('remaining', '不可用', 'warn');
     put('reset', q.note || '');
-    document.getElementById('bar').style.width = '0%';
+    bar.style.width = '0%';
   }
 
+  banner(s.usage.failed > 0
+    ? '近期有 ' + s.usage.failed + ' 次请求失败。若上游提示会话失效，运行 mimo-switch login 重新登录（MiMo 无需开启）。'
+    : 'MiMo 不必保持运行；支持图片输入（截图、读图），三条端点均已验证。');
+
   const base = 'http://' + s.listen + '/v1';
-  put('base', base); put('token', s.require_token ? s.local_token : '（未启用本地令牌）');
+  put('base', base);
+  put('token', s.require_token ? s.local_token : '（未启用本地令牌）');
   put('claude', [
     'set ANTHROPIC_BASE_URL=' + base,
     'set ANTHROPIC_API_KEY=' + s.local_token,
@@ -131,15 +158,48 @@ async function load(){
   put('totals', '共 ' + s.usage.requests + ' 次请求（失败 ' + s.usage.failed + '）· 输入 ' +
       s.usage.prompt_tokens.toLocaleString('zh-CN') + ' / 输出 ' +
       s.usage.completion_tokens.toLocaleString('zh-CN') + ' tokens');
+  put('names', '客户端送来的名字：' + ((s.usage.client_models || []).join('、') || '暂无') +
+      ((s.usage.unmapped_models || []).length
+        ? '；未映射（走了默认模型）：' + s.usage.unmapped_models.join('、') + '，可用 mimo-switch 配置别名'
+        : ''));
 
   const mt = document.querySelector('#models');
-  mt.innerHTML = '<tr><th>模型 ID</th><th>倍率</th></tr>';
-  (s.models || []).forEach(m => {
-    mt.innerHTML += '<tr><td><code>' + m.id + '</code></td><td>' + m.multiplier + 'x</td></tr>';
+  const models = s.models || [];
+  let cheapest = null;
+  models.forEach(m => { if (cheapest === null || m.multiplier < cheapest.multiplier) cheapest = m; });
+  mt.innerHTML = '<tr><th>模型 ID</th><th>倍率</th><th>省额度</th></tr>';
+  models.forEach(m => {
+    mt.innerHTML += '<tr><td><code>' + m.id + '</code></td><td>' + m.multiplier + 'x</td><td>' +
+                    (m === cheapest ? '← 最省' : '') + '</td></tr>';
   });
-  put('hint', s.desktop ? 'Flash 只耗 0.4 倍额度，日常任务建议把模型设为 mimo-x-flash-preview 以省额度。' : '');
+  put('hint', cheapest
+    ? '日常任务建议把模型设为 ' + cheapest.id + '（' + cheapest.multiplier + 'x），其余模型按倍率折算更快耗尽额度。'
+    : '');
+  addCopyButtons();
 }
-load(); setInterval(load, 4000);
+
+// addCopyButtons decorates each snippet once; load() runs on a timer, so the marker matters.
+function addCopyButtons(){
+  document.querySelectorAll('section pre').forEach(pre => {
+    if (pre.dataset.copied) return;
+    pre.dataset.copied = '1';
+    const b = document.createElement('button');
+    b.textContent = '复制';
+    b.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(pre.textContent);
+        b.textContent = '已复制';
+        setTimeout(() => b.textContent = '复制', 1500);
+      } catch (e) {
+        b.textContent = '请手动复制';
+      }
+    };
+    pre.after(b);
+  });
+}
+
+load();
+setInterval(load, 4000);
 </script>
 </body>
 </html>
