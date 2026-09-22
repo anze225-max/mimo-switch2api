@@ -57,6 +57,10 @@ type Config struct {
 	LocalToken   string ` json:"local_token"`
 	RequireToken bool   `json:"require_token"`
 
+	// ModelAliases maps a client's model label (e.g. "sol") onto a real MiMo model id.
+	// Empty means use the built-in defaults.
+	ModelAliases map[string]string `json:"model_aliases,omitempty"`
+
 	// Protected is base64(DPAPI(credential JSON)). The secret never sits in the
 	// config file in plaintext, but is readable to this user without a passphrase.
 	Protected string `json:"credential_protected,omitempty"`

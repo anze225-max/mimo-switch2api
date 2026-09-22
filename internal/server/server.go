@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"mimo-switch/internal/modelmap"
 	"mimo-switch/internal/quota"
 	"mimo-switch/internal/store"
 	"mimo-switch/internal/upstream"
@@ -40,6 +41,8 @@ type Server struct {
 	quotaMu    sync.Mutex
 	quotaValue *quota.Usage
 	quotaAt    time.Time
+
+	resolver *modelmap.Resolver
 
 	// relogin overrides the renewal path; nil means use MiMo's passport flow.
 	relogin relogin
@@ -76,7 +79,21 @@ func New(cfg *store.Config) (*Server, error) {
 		models:       models,
 	}
 	s.pinModel()
+	aliases := cfg.ModelAliases
+	if len(aliases) == 0 {
+		aliases = modelmap.DefaultAliases()
+	}
+	s.resolver = modelmap.New(s.catalogIDs(), aliases, s.credential.Model)
 	return s, nil
+}
+
+// catalogIDs lists the real model ids the desktop currently offers.
+func (s *Server) catalogIDs() []string {
+	ids := make([]string, 0, len(s.models))
+	for _, m := range s.models {
+		ids = append(ids, m.ID)
+	}
+	return ids
 }
 
 // pinModel drops a stored default that the current catalogue no longer offers, so clients
@@ -221,11 +238,12 @@ func (s *Server) desktopModels() []map[string]any {
 	return out
 }
 
-// rewriteModel pins the upstream model for the desktop broker. Clients like Claude Code
-// send their own model names, which mimo-server rejects, so anything unknown becomes the
-// model the credential actually verified against.
+// rewriteModel resolves the client's model label onto a real MiMo model. Clients like
+// Claude Code and Codex send their own names, which mimo-server rejects, so the name is
+// mapped through the alias table; anything unmapped falls back to the default and is
+// recorded so the mapping can be made explicit.
 func (s *Server) rewriteModel(body []byte) []byte {
-	if s.credential.Kind != store.KindDesktop || s.credential.Model == "" {
+	if s.credential.Kind != store.KindDesktop || s.resolver == nil {
 		return body
 	}
 	var probe struct {
@@ -234,30 +252,21 @@ func (s *Server) rewriteModel(body []byte) []byte {
 	if err := json.Unmarshal(body, &probe); err != nil || probe.Model == "" {
 		return body
 	}
-	for _, known := range s.desktopModelIDs() {
-		if probe.Model == known {
-			return body
-		}
+	target, recognised := s.resolver.Resolve(probe.Model)
+	s.tracker.RecordModelName(probe.Model, recognised)
+	if target == probe.Model {
+		return body
 	}
 	var generic map[string]any
 	if err := json.Unmarshal(body, &generic); err != nil {
 		return body
 	}
-	generic["model"] = s.credential.Model
+	generic["model"] = target
 	out, err := json.Marshal(generic)
 	if err != nil {
 		return body
 	}
 	return out
-}
-
-func (s *Server) desktopModelIDs() []string {
-	ids := make([]string, 0, len(s.models)+1)
-	ids = append(ids, s.credential.Model)
-	for _, m := range s.models {
-		ids = append(ids, m.ID)
-	}
-	return ids
 }
 
 // handleChat is a faithful passthrough: the upstream already speaks OpenAI, so the only

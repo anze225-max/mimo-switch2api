@@ -2,6 +2,7 @@
 package usage
 
 import (
+	"sort"
 	"sync"
 	"time"
 )
@@ -28,15 +29,17 @@ type Model struct {
 // Tracker is the single accounting point for the proxy. Its multipliers come from the live
 // catalogue so a MiMo model rename cannot silently mis-price the quota display.
 type Tracker struct {
-	mu          sync.Mutex
-	since       time.Time
-	multipliers map[string]float64
-	requests    int64
-	failed      int64
-	in          int64
-	out         int64
-	weighted    float64
-	perModel    map[string]*ByModel
+	mu           sync.Mutex
+	since        time.Time
+	multipliers  map[string]float64
+	requests     int64
+	failed       int64
+	in           int64
+	out          int64
+	weighted     float64
+	perModel     map[string]*ByModel
+	clientModels map[string]int
+	unmapped     map[string]int
 }
 
 func NewTracker(models []CatalogModel) *Tracker {
@@ -49,7 +52,24 @@ func NewTracker(models []CatalogModel) *Tracker {
 			multipliers[m.ID] = m.Ratio
 		}
 	}
-	return &Tracker{since: time.Now(), multipliers: multipliers, perModel: map[string]*ByModel{}}
+	return &Tracker{
+		since: time.Now(), multipliers: multipliers, perModel: map[string]*ByModel{},
+		clientModels: map[string]int{}, unmapped: map[string]int{},
+	}
+}
+
+// RecordModelName notes what a client actually asked for. mapped=false means no alias or
+// catalogue entry matched, so the request silently used the default model.
+func (t *Tracker) RecordModelName(sent string, mapped bool) {
+	if sent == "" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.clientModels[sent]++
+	if !mapped {
+		t.unmapped[sent]++
+	}
 }
 
 // multiplierFor must be called with t.mu held; Record and SetMultipliers own the locking.
@@ -79,7 +99,11 @@ type Snapshot struct {
 	CompletionToken int64     `json:"completion_tokens"`
 	WeightedUnits   float64   `json:"weighted_units"`
 	ByModel         []ByModel `json:"by_model"`
-	Since           time.Time `json:"since"`
+	// ClientModels lists the raw model names clients actually sent, so an alias can be
+	// configured against evidence instead of guessing what a picker label maps to on the wire.
+	ClientModels []string  `json:"client_models"`
+	Unmapped     []string  `json:"unmapped_models"`
+	Since        time.Time `json:"since"`
 }
 
 type ByModel struct {
@@ -125,5 +149,23 @@ func (t *Tracker) Snapshot() Snapshot {
 		Requests: t.requests, Failed: t.failed,
 		PromptTokens: t.in, CompletionToken: t.out,
 		WeightedUnits: t.weighted, ByModel: models, Since: t.since,
+		ClientModels: keysByCount(t.clientModels),
+		Unmapped:     keysByCount(t.unmapped),
 	}
+}
+
+// keysByCount returns names ordered by descending hit count, so the panel shows the model
+// labels a client uses most often first.
+func keysByCount(counts map[string]int) []string {
+	out := make([]string, 0, len(counts))
+	for k := range counts {
+		out = append(out, k)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if counts[out[i]] != counts[out[j]] {
+			return counts[out[i]] > counts[out[j]]
+		}
+		return out[i] < out[j]
+	})
+	return out
 }
