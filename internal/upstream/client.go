@@ -9,14 +9,17 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
 type Client struct {
 	sk      string
-	cookie  string
 	baseURL string
 	http    *http.Client
+
+	mu     sync.RWMutex
+	cookie string
 }
 
 func New(sk, baseURL string) *Client {
@@ -39,9 +42,23 @@ func NewCookie(cookieHeader, baseURL string) *Client {
 
 func (c *Client) BaseURL() string { return c.baseURL }
 
+// SetCookie swaps the session cookie after a silent renewal. It is guarded because the
+// proxy serves concurrent requests while a refresh can be in flight.
+func (c *Client) SetCookie(cookie string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cookie = cookie
+}
+
+func (c *Client) currentCookie() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.cookie
+}
+
 func (c *Client) authorize(req *http.Request) {
-	if c.cookie != "" {
-		req.Header.Set("cookie", c.cookie)
+	if cookie := c.currentCookie(); cookie != "" {
+		req.Header.Set("cookie", cookie)
 		return
 	}
 	req.Header.Set("Authorization", "Bearer "+c.sk)

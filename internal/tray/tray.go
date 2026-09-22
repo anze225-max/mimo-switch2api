@@ -81,11 +81,11 @@ func Run() error {
 
 	fmt.Fprintf(os.Stderr, "tray started on %s (log: %s)\n", cfg.Listen, logPath)
 
-	systray.Run(func() { ready(cfg, cancel, serverErr) }, func() { cancel() })
+	systray.Run(func() { ready(srv, cfg, cancel, serverErr) }, func() { cancel() })
 	return nil
 }
 
-func ready(cfg *store.Config, cancel context.CancelFunc, serverErr chan error) {
+func ready(srv *server.Server, cfg *store.Config, cancel context.CancelFunc, serverErr chan error) {
 	systray.SetIcon(icon)
 	systray.SetTitle("MiMo Switch")
 	systray.SetTooltip("MiMo 免费额度本地端点 · http://" + cfg.Listen + "/v1")
@@ -93,6 +93,7 @@ func ready(cfg *store.Config, cancel context.CancelFunc, serverErr chan error) {
 	heading := systray.AddMenuItem("MiMo Switch", "本地端点 http://"+cfg.Listen+"/v1")
 	heading.Disable()
 	openPanel := systray.AddMenuItem("打开主界面", "查看用量与各家工具的接入配置")
+	refresh := systray.AddMenuItem("立即续期会话", "用 passToken 静默换取新的 serviceToken，无需打开 MiMo")
 	toggleAuto := systray.AddMenuItem("开机静默自启", "登录时自动启动，不显示任何窗口")
 	systray.AddSeparator()
 	quit := systray.AddMenuItem("退出应用", "停止本地端点并退出")
@@ -106,6 +107,12 @@ func ready(cfg *store.Config, cancel context.CancelFunc, serverErr chan error) {
 			select {
 			case <-openPanel.ClickedCh:
 				openInBrowser("http://" + cfg.Listen + "/")
+			case <-refresh.ClickedCh:
+				if err := srv.RefreshNow(); err != nil {
+					refresh.SetTitle("续期失败：" + err.Error())
+				} else {
+					refresh.SetTitle("已续期")
+				}
 			case <-toggleAuto.ClickedCh:
 				if toggleAuto.Checked() {
 					toggleAuto.Uncheck()

@@ -29,9 +29,25 @@ const (
 type Session struct {
 	ServiceToken string
 	UserID       string
+	CUserId      string
 	PassToken    string
 	Model        string
 	HarvestedAt  time.Time
+}
+
+// Master returns the long-lived half, which is enough to mint a new serviceToken later.
+func (s *Session) Master() MasterCredential {
+	return MasterCredential{
+		PassToken: s.PassToken,
+		UserID:    s.UserID,
+		CUserId:   s.CUserId,
+		SID:       DefaultSID,
+	}
+}
+
+// HasMaster reports whether silent renewal is possible with this credential.
+func (s *Session) HasMaster() bool {
+	return s.PassToken != "" && s.UserID != ""
 }
 
 // CookieHeader is what mimo-server actually authenticates with.
@@ -83,6 +99,11 @@ func ParseExport(raw []byte) (*Session, error) {
 			}
 		case "passToken":
 			s.PassToken = c.Value
+		case "cUserId":
+			// Passport echoes this back on the serviceLogin call.
+			if s.CUserId == "" {
+				s.CUserId = c.Value
+			}
 		}
 	}
 	if s.ServiceToken == "" {

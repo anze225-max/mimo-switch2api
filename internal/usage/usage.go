@@ -52,11 +52,24 @@ func NewTracker(models []CatalogModel) *Tracker {
 	return &Tracker{since: time.Now(), multipliers: multipliers, perModel: map[string]*ByModel{}}
 }
 
+// multiplierFor must be called with t.mu held; Record and SetMultipliers own the locking.
 func (t *Tracker) multiplierFor(model string) float64 {
 	if r, ok := t.multipliers[model]; ok {
 		return r
 	}
 	return DefaultMultiplier
+}
+
+// SetMultipliers adopts a freshly read catalogue, so a MiMo update that changes ratios is
+// reflected without a restart.
+func (t *Tracker) SetMultipliers(models []CatalogModel) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, m := range models {
+		if m.Ratio > 0 {
+			t.multipliers[m.ID] = m.Ratio
+		}
+	}
 }
 
 type Snapshot struct {

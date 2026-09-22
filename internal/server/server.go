@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"mimo-switch/internal/store"
@@ -24,12 +25,19 @@ import (
 type Server struct {
 	client       *upstream.Client
 	credential   *store.Credential
+	cfg          *store.Config
 	listen       string
 	localToken   string
 	requireToken bool
 	tracker      *usage.Tracker
 	startedAt    time.Time
 	models       []usage.CatalogModel
+
+	refreshLock sync.Mutex
+	refreshedAt time.Time
+
+	// relogin overrides the renewal path; nil means use MiMo's passport flow.
+	relogin relogin
 }
 
 func New(cfg *store.Config) (*Server, error) {
@@ -51,6 +59,7 @@ func New(cfg *store.Config) (*Server, error) {
 	s := &Server{
 		client:       client,
 		credential:   cred,
+		cfg:          cfg,
 		listen:       cfg.Listen,
 		localToken:   cfg.LocalToken,
 		requireToken: cfg.RequireToken,
@@ -252,7 +261,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request_error", "read body: "+err.Error())
 		return
 	}
-	res, err := s.client.Post(r.Context(), "/chat/completions", json.RawMessage(s.rewriteModel(body)))
+	res, err := s.post(r.Context(), "/chat/completions", json.RawMessage(s.rewriteModel(body)))
 	if err != nil {
 		s.forwardError(w, err)
 		return
@@ -281,7 +290,7 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	_ = json.Unmarshal(body, &probe)
 
 	if !probe.Stream {
-		res, err := s.client.Post(r.Context(), "/chat/completions", json.RawMessage(translated))
+		res, err := s.post(r.Context(), "/chat/completions", json.RawMessage(translated))
 		if err != nil {
 			s.forwardError(w, err)
 			return
@@ -304,7 +313,7 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := s.client.Post(r.Context(), "/chat/completions", json.RawMessage(translated))
+	res, err := s.post(r.Context(), "/chat/completions", json.RawMessage(translated))
 	if err != nil {
 		s.forwardError(w, err)
 		return
@@ -347,7 +356,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	_ = json.Unmarshal(body, &probe)
 
 	if !probe.Stream {
-		res, err := s.client.Post(r.Context(), "/chat/completions", json.RawMessage(chatBody))
+		res, err := s.post(r.Context(), "/chat/completions", json.RawMessage(chatBody))
 		if err != nil {
 			s.forwardError(w, err)
 			return
@@ -370,7 +379,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := s.client.Post(r.Context(), "/chat/completions", json.RawMessage(chatBody))
+	res, err := s.post(r.Context(), "/chat/completions", json.RawMessage(chatBody))
 	if err != nil {
 		s.forwardError(w, err)
 		return

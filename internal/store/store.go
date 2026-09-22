@@ -3,6 +3,7 @@ package store
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -21,13 +22,19 @@ const (
 )
 
 type Credential struct {
-	SK       string    `json:"sk"`
-	Cookie   string    `json:"cookie,omitempty"`
-	Kind     string    `json:"kind,omitempty"`
-	BaseURL  string    `json:"base_url"`
-	UID      string    `json:"uid"`
-	KeyName  string    `json:"key_name"`
-	Model    string    `json:"model,omitempty"`
+	SK      string `json:"sk"`
+	Cookie  string `json:"cookie,omitempty"`
+	Kind    string `json:"kind,omitempty"`
+	BaseURL string `json:"base_url"`
+	UID     string `json:"uid"`
+	KeyName string `json:"key_name"`
+	Model   string `json:"model,omitempty"`
+
+	// Master credential for the desktop session: passport's long-lived passToken lets the
+	// tool renew serviceToken on its own, with MiMo closed. Kept inside the DPAPI blob.
+	PassToken string `json:"pass_token,omitempty"`
+	CUserId   string `json:"c_user_id,omitempty"`
+
 	IssuedAt time.Time `json:"issued_at"`
 }
 
@@ -67,6 +74,21 @@ func (c *Credential) Masked() string {
 		return "已配置"
 	}
 	return secret[:8] + "…" + secret[len(secret)-4:] + fmt.Sprintf(" (%d)", len(secret))
+}
+
+// Fingerprint is a short hash of the secret. Masked() cannot show whether a session cookie
+// was renewed, because it is dominated by the constant "serviceToken=" prefix and the
+// trailing userId; this can.
+func (c *Credential) Fingerprint() string {
+	secret := c.SK
+	if c.Kind == KindDesktop {
+		secret = c.Cookie
+	}
+	if secret == "" {
+		return "-"
+	}
+	sum := sha256.Sum256([]byte(secret))
+	return hex.EncodeToString(sum[:])[:10]
 }
 
 func Dir() (string, error) {

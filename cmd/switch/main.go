@@ -35,6 +35,8 @@ func printUsage() {
   mimo-switch authorize            打开官方授权页签发 API key（浏览器里确认一次）
   mimo-switch authorize --code X   授权页显示 code 时的手动兜底
   mimo-switch harvest [--file F]   接管 MiMo 桌面端登录会话（免费额度，推荐）
+  mimo-switch harvest --launch     未运行时自动带调试端口拉起 MiMo 并等待登录
+  mimo-switch refresh              用已存的 passToken 静默续期（无需 MiMo 运行）
   mimo-switch status               查看已保存的凭证（掩码显示）
   mimo-switch models               用该 key 拉取上游模型列表，验证可用
   mimo-switch probe [model]        发一条最小补全，验证端到端
@@ -52,6 +54,8 @@ func run(args []string) error {
 		return cmdAuthorize(args[1:])
 	case "harvest":
 		return cmdHarvest(args[1:])
+	case "refresh":
+		return cmdRefresh()
 	case "status":
 		return cmdStatus()
 	case "models":
@@ -310,12 +314,14 @@ func cmdHarvest(args []string) error {
 		return err
 	}
 	cfg.SetCredential(&store.Credential{
-		Kind:     store.KindDesktop,
-		Cookie:   session.CookieHeader(),
-		BaseURL:  desktopauth.BaseURL,
-		UID:      session.UserID,
-		Model:    model,
-		IssuedAt: session.HarvestedAt.UTC(),
+		Kind:      store.KindDesktop,
+		Cookie:    session.CookieHeader(),
+		BaseURL:   desktopauth.BaseURL,
+		UID:       session.UserID,
+		Model:     model,
+		PassToken: session.PassToken,
+		CUserId:   session.CUserId,
+		IssuedAt:  session.HarvestedAt.UTC(),
 	})
 	if err := cfg.Save(); err != nil {
 		return err
@@ -361,6 +367,39 @@ func cmdAutostart(args []string) error {
 		fmt.Println("  启动命令:", command)
 		return nil
 	}
+}
+
+func cmdRefresh() error {
+	cfg, err := store.Load()
+	if err != nil {
+		return err
+	}
+	if cfg.Credential() == nil {
+		return fmt.Errorf("还没有凭证，先运行: mimo-switch harvest")
+	}
+	if cfg.Credential().PassToken == "" {
+		return fmt.Errorf("当前凭证没有保存 passToken，无法自动续期。请重新运行: mimo-switch harvest")
+	}
+	srv, err := server.New(cfg)
+	if err != nil {
+		return err
+	}
+	before := cfg.Credential().Fingerprint()
+	if err := srv.RefreshNow(); err != nil {
+		return err
+	}
+	cred := cfg.Credential()
+	after := cred.Fingerprint()
+	fmt.Println("续期完成。")
+	fmt.Printf("  指纹   : %s -> %s\n", before, after)
+	if before == after {
+		fmt.Println("  说明   : 服务端返回了同一个 serviceToken（尚未轮换）")
+	} else {
+		fmt.Println("  说明   : 已换成新的 serviceToken")
+	}
+	fmt.Printf("  模型   : %s\n", cred.Model)
+	fmt.Printf("  时间   : %s\n", cred.IssuedAt.Local().Format(time.RFC3339))
+	return nil
 }
 
 func cmdServe(args []string) error {
