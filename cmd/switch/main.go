@@ -43,7 +43,7 @@ func printUsage() {
 	fmt.Fprint(os.Stderr, `mimo-switch — 把 MiMo 免费额度暴露成本地 OpenAI/Anthropic 端点
 
 用法:
-  mimo-switch harvest --launch     首次取凭证：带调试端口启动 MiMo，等你在它里面登录后接管会话（推荐）
+  mimo-switch login                在本工具打开的小米登录窗口里登录，取回桌面端免费额度（推荐）
   mimo-switch refresh              用已存的 passToken 静默续期（无需 MiMo 运行）
   mimo-switch serve                启动本地反代
   mimo-switch tray                 后台运行 + 托盘图标（静默，无控制台）
@@ -55,8 +55,8 @@ func printUsage() {
   其它:
   mimo-switch authorize            打开官方授权页签发 API key（需小米付费套餐）
   mimo-switch authorize --code X   授权页显示 code 时的手动兜底
-  mimo-switch harvest [--file F]   从已在运行且开了调试端口的 MiMo 取会话
-  mimo-switch login                实验：在本工具自己的窗口里登录小米（目前换票第二步会被拒）
+  mimo-switch harvest [--file F]   兜底：从已在运行且开了调试端口的 MiMo 取会话
+  mimo-switch harvest --launch     兜底：带调试端口启动 MiMo，从它的会话里接管（需要装 MiMo）
 `)
 }
 
