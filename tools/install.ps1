@@ -1,4 +1,4 @@
-# 安装 MiMo Switch：复制到 %LOCALAPPDATA%\MiMoSwitch，建开始菜单快捷方式，开机静默自启并启动。
+﻿# 安装 MiMo Switch：复制到 %LOCALAPPDATA%\MiMoSwitch，建开始菜单快捷方式，开机静默自启并启动。
 # 用法：在解压出来的文件夹里右键「使用 PowerShell 运行」，或执行  powershell -ExecutionPolicy Bypass -File install.ps1
 $ErrorActionPreference = 'Stop'
 
