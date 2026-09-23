@@ -479,6 +479,12 @@ func installNow(cfg *store.Config, self string) error {
 		fmt.Fprintf(os.Stderr, "从新位置启动失败，就地继续运行: %v\n", err)
 		return nil
 	}
+	// The copy the user downloaded has served its purpose: the install folder holds the real
+	// one now. It is this process's own image, so a detached helper removes it once we exit —
+	// leaving nothing behind in the download folder to wonder about.
+	if err := install.SweepAfterExit(self); err != nil {
+		fmt.Fprintf(os.Stderr, "清理下载位置失败: %v\n", err)
+	}
 	os.Exit(0)
 	return nil
 }
