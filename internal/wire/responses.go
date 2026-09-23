@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"strconv"
 	"strings"
 )
@@ -41,6 +42,11 @@ type ResponsesRequest struct {
 	Tools           []json.RawMessage `json:"tools,omitempty"`
 	ToolChoice      any               `json:"tool_choice,omitempty"`
 }
+
+// debugTools turns on the per-request tool diagnostics. Set MIMO_DEBUG_TOOLS=1 to trace
+// exactly which layout a client used and which tools the model was offered; without it the
+// package stays silent so a normal session does not fill the log.
+var debugTools = os.Getenv("MIMO_DEBUG_TOOLS") != ""
 
 // toolSet collects the chat tools a Responses request asks for, from every place Codex
 // may put them, and remembers the reverse mapping needed to answer in Responses terms.
@@ -149,8 +155,10 @@ func (ts *toolSet) addTool(raw json.RawMessage, namespace string) {
 		// Hosted tools (web_search, tool_search, local_shell, image_generation) have no
 		// chat-completions equivalent, and forwarding one unknown type makes the upstream
 		// reject the whole request — which would cost the client every tool it sent.
-		log.Printf("responses: dropping hosted tool %q (type %q): not expressible as a chat function",
-			tool.Name, tool.Type)
+		if debugTools {
+			log.Printf("responses: dropping hosted tool %q (type %q): not expressible as a chat function",
+				tool.Name, tool.Type)
+		}
 	}
 }
 
@@ -201,11 +209,13 @@ func ResponsesToChat(body []byte) ([]byte, error) {
 	for _, raw := range req.Tools {
 		tools.addTool(raw, "")
 	}
+	var liteItems int
 
 	for _, item := range items {
 		switch item.Type {
 		case "additional_tools":
 			// Responses-Lite carries the entire tool list here, one item per request.
+			liteItems++
 			for _, raw := range item.Tools {
 				tools.addTool(raw, "")
 			}
@@ -256,6 +266,23 @@ func ResponsesToChat(body []byte) ([]byte, error) {
 		// An empty tools array alongside a tool_choice is itself a rejected request; when
 		// there is nothing to choose from, say nothing at all.
 		out.ToolChoice = nil
+	}
+	// One line per request so a real client session can be inspected without a packet
+	// capture: which layout arrived, and what the model was actually offered. Off by
+	// default because the tool list of every request is noisy in normal use.
+	if debugTools {
+		if liteItems > 0 || len(tools.chat) > 0 {
+			names := make([]string, 0, len(tools.chat))
+			for _, t := range tools.chat {
+				mark := ""
+				if tools.custom[t.Function.Name] {
+					mark = "(freeform)"
+				}
+				names = append(names, t.Function.Name+mark)
+			}
+			log.Printf("responses: model=%s lite_tool_items=%d top_level_tools=%d -> offering %d tools: %s",
+				req.Model, liteItems, len(req.Tools), len(tools.chat), strings.Join(names, ", "))
+		}
 	}
 	encoded, err := json.Marshal(out)
 	if err != nil {
