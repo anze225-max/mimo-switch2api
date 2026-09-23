@@ -57,8 +57,7 @@ bash tools/make-release.sh    # 产出 dist/mimo-switch-win-x64.zip
 
 ## 致谢
 
-- **[cv-superding/WorkBuddy-Switch2api](https://github.com/cv-superding/WorkBuddy-Switch2api)** —— 本 README 的行文与合规措辞借鉴了该项目，在此致谢。
-- 以及 [Go](https://go.dev)、[golang.org/x/sys](https://pkg.go.dev/golang.org/x/sys) 等开源项目。
+- **[cv-superding/WorkBuddy-Switch2api](https://github.com/cv-superding/WorkBuddy-Switch2api)** —— 感谢该开源项目。
 
 ## 免责声明
 
