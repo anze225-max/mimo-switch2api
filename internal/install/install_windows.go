@@ -6,6 +6,7 @@
 package install
 
 import (
+	_ "embed"
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
@@ -20,6 +21,9 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+//go:embed readme.txt
+var readmeText string
+
 const (
 	dirName = "MiMoSwitch"
 	exeName = "MiMoSwitch.exe"
@@ -27,6 +31,10 @@ const (
 	// uninstallerName is a byte-identical copy of the main exe that learns its job from its
 	// own file name, so the install folder holds a real double-clickable uninstaller.
 	uninstallerName = "卸载 MiMo Switch.exe"
+
+	// readmeName is the 使用说明 the install drops beside the exe, so the download a user
+	// gets can stay a bare exe and the documentation lives where the app lives.
+	readmeName = "README.txt"
 
 	// stagedPrefix names the temp copy an uninstall continues from, so one pattern serves both
 	// recognising it and sweeping the ones an abnormal exit left behind.
@@ -100,7 +108,8 @@ func OnlyOurs(dir string) (foreign []string, err error) {
 	}
 	for _, e := range entries {
 		name := e.Name()
-		if strings.EqualFold(name, exeName) || strings.EqualFold(name, uninstallerName) {
+		if strings.EqualFold(name, exeName) || strings.EqualFold(name, uninstallerName) ||
+			strings.EqualFold(name, readmeName) {
 			continue
 		}
 		foreign = append(foreign, name)
@@ -233,6 +242,16 @@ func EnsureUninstaller(exe string) error {
 		return err
 	}
 	return nil
+}
+
+// EnsureReadme drops the 使用说明 beside the exe on every launch when its content drifted,
+// so the documentation lives in the install folder instead of the download the user deletes.
+func EnsureReadme(exe string) error {
+	dst := filepath.Join(filepath.Dir(exe), readmeName)
+	if got, err := os.ReadFile(dst); err == nil && string(got) == readmeText {
+		return nil
+	}
+	return os.WriteFile(dst, []byte(readmeText), 0o600)
 }
 
 // writeCopy copies src to dst with 0700, leaving dst untouched if the copy fails midway.

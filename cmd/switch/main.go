@@ -373,6 +373,9 @@ func cmdTray() error {
 	if err := ensureCredential(cfg); err != nil {
 		return err
 	}
+	// Nothing we do needs the launch folder, and keeping it as the working directory would
+	// hold the user's download folder hostage for as long as the tray runs.
+	stepOutOfTarget()
 	return tray.Run()
 }
 
@@ -401,7 +404,10 @@ func installNow(cfg *store.Config, self string) error {
 				return err
 			}
 		}
-		return install.EnsureUninstaller(exe)
+		if err := install.EnsureUninstaller(exe); err != nil {
+			return err
+		}
+		return install.EnsureReadme(exe)
 	}
 	// A folder the user moved by hand is still their install: follow it. Relocating back to the
 	// recorded path instead would leave two live copies and a logon entry pointing at the old one.
@@ -411,7 +417,10 @@ func installNow(cfg *store.Config, self string) error {
 		if err := cfg.Save(); err != nil {
 			return err
 		}
-		return install.EnsureUninstaller(self)
+		if err := install.EnsureUninstaller(self); err != nil {
+			return err
+		}
+		return install.EnsureReadme(self)
 	}
 	justPicked := false
 	if cfg.InstallDir == "" {
@@ -458,8 +467,14 @@ func installNow(cfg *store.Config, self string) error {
 	if err := install.EnsureUninstaller(moved); err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 	}
+	if err := install.EnsureReadme(moved); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+	}
 	fmt.Println("已安置到", moved, "，改由该位置继续运行。")
 	child := exec.Command(moved, os.Args[1:]...)
+	// Inherited as-is, the working directory would stay in the download folder and hold it
+	// for as long as the child lives — the folder the user expects to delete right after.
+	child.Dir = filepath.Dir(moved)
 	if err := child.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "从新位置启动失败，就地继续运行: %v\n", err)
 		return nil

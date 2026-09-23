@@ -12,7 +12,7 @@
 
 ## 下载
 
-目前仅支持 Windows 系统。从 [GitHub Releases](../../releases/latest) 下载 `mimo-switch-win-x64.zip`，解压后双击 `MiMoSwitch.exe`：
+目前仅支持 Windows 系统。从 [GitHub Releases](../../releases/latest) 下载 `MiMoSwitch.exe`（就这一个文件）双击运行：
 
 1. 首次运行弹出目录选择框，选定安装位置（需当前用户可写，例如 `D:\MiMoSwitch`；系统目录会被拒绝）
 2. 安装完成后自动注册开机自启（可在面板关闭），托盘常驻，浏览器打开 `http://127.0.0.1:7864/`
@@ -52,7 +52,7 @@ mimo-switch.exe harvest --launch
 
 ```bash
 go build -trimpath -buildvcs=false -ldflags "-H=windowsgui -s -w" -o bin/MiMoSwitch.exe ./cmd/switch
-bash tools/make-release.sh    # 产出 dist/mimo-switch-win-x64.zip
+bash tools/make-release.sh    # 产出 dist/MiMoSwitch.exe
 ```
 
 ## 致谢

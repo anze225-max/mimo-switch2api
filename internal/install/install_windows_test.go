@@ -140,6 +140,55 @@ func TestEnsureUninstallerReplacesMissingCopy(t *testing.T) {
 	}
 }
 
+func TestEnsureReadmeWritesRefreshesAndLeavesAlone(t *testing.T) {
+	dir := t.TempDir()
+	exe := filepath.Join(dir, exeName)
+	writeFakeExe(t, exe, 64)
+	dst := filepath.Join(dir, readmeName)
+
+	if err := EnsureReadme(exe); err != nil {
+		t.Fatalf("EnsureReadme: %v", err)
+	}
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != readmeText {
+		t.Fatal("README.txt does not carry the embedded 使用说明")
+	}
+
+	// Untouched content must not be rewritten: this runs on every launch.
+	infoBefore, err := os.Stat(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureReadme(exe); err != nil {
+		t.Fatalf("EnsureReadme (second pass): %v", err)
+	}
+	infoAfter, err := os.Stat(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !infoBefore.ModTime().Equal(infoAfter.ModTime()) {
+		t.Errorf("idle launch rewrote the readme: %v -> %v", infoBefore.ModTime(), infoAfter.ModTime())
+	}
+
+	// A hand-edited file is put back: the doc must not go stale or wrong across upgrades.
+	if err := os.WriteFile(dst, []byte("旧版说明"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureReadme(exe); err != nil {
+		t.Fatalf("EnsureReadme (after edit): %v", err)
+	}
+	got, err = os.ReadFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != readmeText {
+		t.Error("tampered README.txt was not refreshed")
+	}
+}
+
 func TestLooksInstalledRejectsForeignDir(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "readme.txt"), []byte("x"), 0o600); err != nil {
@@ -237,7 +286,7 @@ func TestHasUninstallerSeparatesInstallFromDownload(t *testing.T) {
 
 func TestOnlyOursFlagsForeignFiles(t *testing.T) {
 	dir := t.TempDir()
-	for _, name := range []string{exeName, uninstallerName} {
+	for _, name := range []string{exeName, uninstallerName, readmeName} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o700); err != nil {
 			t.Fatal(err)
 		}
