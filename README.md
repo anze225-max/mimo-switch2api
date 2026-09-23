@@ -39,12 +39,33 @@ mimo-switch.exe harvest --launch
 | 模块 | 说明 |
 | --- | --- |
 | OpenAI 协议端点 | `POST /v1/chat/completions`（流式与非流式、图片输入）、`GET /v1/models`、`GET /` 面板 |
+| Responses 协议端点 | `POST /v1/responses`，供 Codex 等使用 Responses API 的工具接入（见下节） |
 | 工具内登录 | 弹窗显示小米官方登录页，OAuth 由用户本人完成；支持自动续期与保活 |
 | 会话采纳 | `harvest --launch` 从本机 MiMo 桌面端采纳已登录会话，无需重新登录 |
 | 面板 | 状态、额度来源、剩余额度、真实 token 用量统计、可用模型与倍率 |
 | 启动与保活 | 开机静默自启、端点中断自动重启、保活续期间隔，均可在面板配置 |
 | 自安装 | 首次运行选择安装目录（记录后不再询问）；安装目录内自带卸载副本 |
 | 一键卸载 | 删自启项、快捷方式、安装目录、配置与凭证；目录里有陌生文件时会保留并提示 |
+
+## 接入 Codex
+
+Codex 走的是 OpenAI 的 **Responses** 协议，本端点已支持，包括 Codex 特有的两种工具下发方式
+（普通 `tools` 字段，以及新版模型使用的 `additional_tools` / `namespace` 布局与自由格式工具）。
+在 `~/.codex/config.toml` 里加：
+
+```toml
+[model_providers.mimo]
+name = "MiMo (local mimo-switch)"
+base_url = "http://127.0.0.1:7864/v1"
+wire_api = "responses"
+requires_openai_auth = false
+experimental_bearer_token = "<面板里的本地令牌>"
+```
+
+然后 `model_provider = "mimo"`、`model = "mimo-v2.6-flash"`。
+
+排查工具相关问题时可设 `MIMO_DEBUG_TOOLS=1` 启动，会打印每次请求的工具布局与最终提供给模型的
+工具列表。
 
 ## 自行构建
 

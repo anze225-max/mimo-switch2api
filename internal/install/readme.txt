@@ -12,6 +12,19 @@ MiMo Switch 使用说明
 本端点使用 OpenAI 协议：把这三项填进任何支持 OpenAI 接口的工具
 （OPENAI_BASE_URL / OPENAI_API_KEY / model）即可，无需其他配置。支持图片输入。
 
+接入 Codex
+----------
+Codex 走 OpenAI 的 Responses 协议，本端点同样支持。在 ~/.codex/config.toml 里加：
+
+  [model_providers.mimo]
+  name = "MiMo (local mimo-switch)"
+  base_url = "http://127.0.0.1:7864/v1"
+  wire_api = "responses"
+  requires_openai_auth = false
+  experimental_bearer_token = "<面板里的本地令牌>"
+
+再设 model_provider = "mimo"、model = "mimo-v2.6-flash" 即可。
+
 常用
 ----
 · 下载的那个 exe 在安装完成时会被自动移走（本目录里的才是正式的一份），下载目录不会留下文件。
