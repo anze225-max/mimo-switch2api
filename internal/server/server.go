@@ -451,6 +451,12 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
 	}
+	// Split the private tool mapping off the chat body; it must not reach the upstream.
+	plan, chatBody, err := wire.ToolPlanFromChat(chatBody)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return
+	}
 	var probe wire.ResponsesRequest
 	_ = json.Unmarshal(body, &probe)
 
@@ -467,7 +473,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.recordFromChatJSON(raw)
-		out, err := wire.ChatToResponse(raw)
+		out, err := wire.ChatToResponse(plan, raw)
 		if err != nil {
 			writeError(w, http.StatusBadGateway, "api_error", err.Error())
 			return
@@ -493,7 +499,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
-	stream := wire.NewResponseStream()
+	stream := wire.NewResponseStream(plan)
 	relayEvents(w, flusher, res.Body, stream.Start, stream.Feed, stream.Finish)
 	in, out := stream.Usage()
 	s.record(s.credential().Model, in, out, false)
