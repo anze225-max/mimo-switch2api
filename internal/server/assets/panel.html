@@ -34,7 +34,7 @@
 </head>
 <body>
   <h1>MiMo Switch</h1>
-  <div class="sub">把 MiMo 桌面端的免费额度暴露成本地 OpenAI / Anthropic / Responses 端点</div>
+  <div class="sub">把 MiMo 桌面端的免费额度暴露成本地端点（OpenAI 协议）</div>
   <div class="note" id="banner" style="min-height:16px"></div>
 
   <div class="grid">
@@ -63,17 +63,14 @@
   </section>
 
   <section>
-    <h2>接入配置</h2>
-    <div class="k">本地端点</div>
+    <h2>接入配置（OpenAI 协议）</h2>
+    <div class="k">接口地址</div>
     <pre id="base"></pre>
-    <div class="k">本地访问令牌（仅本机）</div>
+    <div class="k">API Key（本地令牌，仅本机）</div>
     <pre id="token"></pre>
-    <div class="k">Claude Code</div>
-    <pre id="claude"></pre>
-    <div class="k">Codex CLI（~/.codex/config.toml）</div>
-    <pre id="codex"></pre>
-    <div class="k">Cursor / Cline / 其他 OpenAI 兼容工具</div>
-    <pre id="openai"></pre>
+    <div class="k">模型</div>
+    <pre id="model"></pre>
+    <div class="note">本端点使用 OpenAI 协议：把上面三项填进任意支持 OpenAI 接口的工具（OPENAI_BASE_URL / OPENAI_API_KEY / model）即可，无需其他配置。</div>
   </section>
 
   <section>
@@ -154,7 +151,7 @@ async function load(){
 
   banner(s.usage.failed > 0
     ? '近期有 ' + s.usage.failed + ' 次请求失败。若上游提示会话失效，运行 mimo-switch login 重新登录（MiMo 无需开启）。'
-    : 'MiMo 不必保持运行；支持图片输入（截图、读图），三条端点均已验证。');
+    : 'MiMo 不必保持运行；支持图片输入（截图、读图）。');
 
   const base = 'http://' + s.listen + '/v1';
   token = s.local_token || '';
@@ -163,27 +160,7 @@ async function load(){
   loginBtn.textContent = s.login_pending ? '等待你在窗口里登录…' : '登录／重新授权小米账号';
   put('base', base);
   put('token', s.require_token ? s.local_token : '（未启用本地令牌）');
-  put('claude', [
-    'set ANTHROPIC_BASE_URL=' + base,
-    'set ANTHROPIC_API_KEY=' + s.local_token,
-    'set ANTHROPIC_MODEL=' + s.model,
-    'claude'
-  ].join('\n'));
-  put('codex', [
-    '[model_providers.mimo]',
-    'name = "MiMo 桌面端免费额度"',
-    'base_url = "' + base + '"',
-    'env_key = "MIMO_LOCAL_TOKEN"',
-    'wire_api = "responses"',
-    '',
-    'set MIMO_LOCAL_TOKEN=' + s.local_token,
-    'codex --model ' + s.model + ' --model-provider mimo'
-  ].join('\n'));
-  put('openai', [
-    'OPENAI_BASE_URL=' + base,
-    'OPENAI_API_KEY=' + s.local_token,
-    'model=' + s.model
-  ].join('\n'));
+  put('model', s.model);
 
   const t = document.querySelector('#usage');
   t.innerHTML = '<tr><th>模型</th><th>请求</th><th>倍率</th><th>额度单位(k tokens×倍率)</th></tr>';
