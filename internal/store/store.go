@@ -64,6 +64,11 @@ type Config struct {
 	// so a config written before this option existed keeps behaving the same.
 	RestartOnCrash *bool `json:"restart_on_crash,omitempty"`
 
+	// InstallDir is the folder the distributable anchored itself in, chosen on first run.
+	// Without it the next launch would assume it was never installed and move the exe back
+	// to the default, prompting for a location all over again.
+	InstallDir string `json:"install_dir,omitempty"`
+
 	// ModelAliases maps a client's model label (e.g. "sol") onto a real MiMo model id.
 	// Empty means use the built-in defaults.
 	ModelAliases map[string]string `json:"model_aliases,omitempty"`

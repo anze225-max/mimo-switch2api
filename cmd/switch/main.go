@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -39,12 +41,13 @@ func main() {
 	}
 }
 
-// isInstalledBuild reports whether this is the distributable GUI binary, the only one that
-// should ever speak through a dialog box. A console build may run without a Windows console
-// (Git Bash hands out a pseudo-terminal), so testing for a console misclassifies it.
+// isInstalledBuild reports whether this is one of the two GUI binaries users get — the app or
+// its uninstaller copy — the only ones that should ever speak through a dialog box. A console
+// build may run without a Windows console (Git Bash hands out a pseudo-terminal), so testing
+// for a console misclassifies it.
 func isInstalledBuild() bool {
 	exe, err := os.Executable()
-	return err == nil && install.IsDistributable(exe)
+	return err == nil && (install.IsDistributable(exe) || install.IsUninstaller(exe))
 }
 
 func printUsage() {
@@ -54,9 +57,9 @@ func printUsage() {
   mimo-switch login                在本工具打开的小米登录窗口里登录，取回桌面端免费额度（推荐）
   mimo-switch refresh              用已存的 passToken 静默续期（无需 MiMo 运行）
   mimo-switch serve                启动本地反代
-  mimo-switch tray                 后台运行 + 托盘图标（静默，无控制台）
+  mimo-switch tray                 后台运行 + 托盘图标（静默，无控制台；首次运行会让你选安装位置）
   mimo-switch autostart on|off     开机静默自启
-  mimo-switch uninstall            一键卸载：删自启项、快捷方式、程序目录与配置（--keep-config 保留凭证）
+  mimo-switch uninstall            一键卸载：删自启项、快捷方式、安装目录与配置（--keep-config 保留凭证）
   mimo-switch status               查看已保存的凭证（掩码显示）
   mimo-switch models               用当前凭证拉取上游模型列表，验证可用
   mimo-switch probe [model]        发一条最小补全，验证端到端
@@ -71,6 +74,10 @@ func printUsage() {
 
 func run(args []string) error {
 	if len(args) == 0 {
+		if exe, err := os.Executable(); err == nil && install.IsUninstaller(exe) {
+			// 卸载 MiMo Switch.exe carries no arguments: the file name is the whole command.
+			return cmdUninstall(nil)
+		}
 		if isInstalledBuild() {
 			return cmdTray() // double-clicked: go straight to the silent tray app
 		}
@@ -341,15 +348,22 @@ func cmdHarvest(args []string) error {
 // cmdTray is what a double-click gives you. If an instance already serves the port, open
 // its panel instead of failing to bind; otherwise sign in when needed and run the tray.
 func cmdTray() error {
-	if err := relocate(); err != nil {
-		return err
-	}
-	if err := ensureRegistered(); err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-	}
 	cfg, err := store.Load()
 	if err != nil {
 		return err
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	if err := installNow(cfg, self); err != nil {
+		if errors.Is(err, errInstallCancelled) {
+			return nil // nothing was installed and nothing should start
+		}
+		return err
+	}
+	if err := ensureRegistered(cfg.InstallDir); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
 	}
 	if running := existingInstance(cfg.Listen); running != "" {
 		fmt.Printf("已有一个 MiMo Switch 在运行（%s），为你打开主界面。\n", running)
@@ -362,20 +376,90 @@ func cmdTray() error {
 	return tray.Run()
 }
 
-// relocate moves the distributable into %LOCALAPPDATA%\MiMoSwitch and hands over to that
-// copy, so the logon entry and shortcuts point at a path that survives the download folder
-// being cleaned out. Failing to move is never fatal: it just runs where it was.
-func relocate() error {
-	exe, err := install.Relocate()
+// errInstallCancelled means the user backed out of the folder picker. It is not a failure: the
+// process just exits without a dialog.
+var errInstallCancelled = errors.New("已取消安装")
+
+// installNow puts the distributable in the folder it should live in and hands the run over to
+// that copy, so the logon entry and the shortcuts point at a path that survives the download
+// folder being cleaned out. The folder is picked once, on the very first run; after that the
+// record in the config decides, and no dialog ever appears again.
+func installNow(cfg *store.Config, self string) error {
+	if !install.IsDistributable(self) {
+		return nil
+	}
+	dir, exe, err := install.Target(cfg.InstallDir)
+	if err != nil {
+		return err
+	}
+	if strings.EqualFold(self, exe) {
+		// Adopt the path we are already running from, so a copy installed before this option
+		// existed does not look uninstalled and start moving itself around.
+		if cfg.InstallDir == "" {
+			cfg.InstallDir = dir
+			if err := cfg.Save(); err != nil {
+				return err
+			}
+		}
+		return install.EnsureUninstaller(exe)
+	}
+	// A folder the user moved by hand is still their install: follow it. Relocating back to the
+	// recorded path instead would leave two live copies and a logon entry pointing at the old one.
+	if home := filepath.Dir(self); cfg.InstallDir != "" && install.HasUninstaller(home) &&
+		install.AcceptableTarget(home) == nil {
+		cfg.InstallDir = home
+		if err := cfg.Save(); err != nil {
+			return err
+		}
+		return install.EnsureUninstaller(self)
+	}
+	justPicked := false
+	if cfg.InstallDir == "" {
+		picked := chooseInstallDir(dir)
+		if picked == "" {
+			return errInstallCancelled
+		}
+		// The picker can reach a drive root or the user's Documents folder; installing there
+		// would make uninstall delete something the user cares about.
+		if err := install.AcceptableTarget(picked); err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			if isInstalledBuild() {
+				notify.Error("MiMo Switch 不能装在那里", err)
+			}
+			return errInstallCancelled
+		}
+		cfg.InstallDir = picked
+		justPicked = true
+		// Recorded before the copy is made: the child process reads it to find its own home.
+		if err := cfg.Save(); err != nil {
+			return err
+		}
+	}
+	moved, err := install.Relocate(cfg.InstallDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "自我安置失败，就地运行: %v\n", err)
+		if justPicked {
+			// A first install that cannot write there — needs admin, or read-only media: forget
+			// the record so the next double-click asks again instead of retrying a location that
+			// cannot hold us. An upgrade that failed because the old copy is still running keeps
+			// its record, so the app does not start prompting on every launch.
+			cfg.InstallDir = ""
+			_ = cfg.Save()
+			if isInstalledBuild() {
+				notify.Error("MiMo Switch 无法安装到该位置",
+					fmt.Errorf("%v\n\n该目录当前用户不可写（例如 C:\\Program Files 需要管理员权限）。请重新双击并换一个位置，例如 D:\\MiMoSwitch。", err))
+			}
+		}
 		return nil
 	}
-	if exe == "" {
+	if moved == "" {
 		return nil
 	}
-	fmt.Println("已安置到", exe, "，改由该位置继续运行。")
-	child := exec.Command(exe, os.Args[1:]...)
+	if err := install.EnsureUninstaller(moved); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+	}
+	fmt.Println("已安置到", moved, "，改由该位置继续运行。")
+	child := exec.Command(moved, os.Args[1:]...)
 	if err := child.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "从新位置启动失败，就地继续运行: %v\n", err)
 		return nil
@@ -384,10 +468,25 @@ func relocate() error {
 	return nil
 }
 
+// chooseInstallDir asks for a folder, falling back to the default when the shell cannot put up a
+// dialog at all — a headless or PowerShell-less machine should still get a working app. "" means
+// the user backed out.
+func chooseInstallDir(fallback string) string {
+	picked, err := pickDir(fallback)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n安装到默认位置 %s。\n", err, fallback)
+		return fallback
+	}
+	return picked
+}
+
+// pickDir is a seam so the first-run flow can be tested without a real folder dialog.
+var pickDir = install.ChooseDir
+
 // ensureRegistered keeps the logon entry and the shortcuts pointed at wherever this copy
 // actually lives. It only writes when something differs, so a normal launch costs a
 // registry read.
-func ensureRegistered() error {
+func ensureRegistered(recorded string) error {
 	exe, err := os.Executable()
 	if err != nil || !install.IsDistributable(exe) {
 		return err
@@ -395,16 +494,16 @@ func ensureRegistered() error {
 	if on, command, err := autostart.Enabled(); err == nil && on && strings.Contains(command, exe) {
 		return nil
 	}
-	return registerStartup()
+	return registerStartup(recorded)
 }
 
 // registerStartup points the logon entry at the installed copy and adds the Start Menu
 // entries, including the one-click uninstaller.
-func registerStartup() error {
+func registerStartup(recorded string) error {
 	if err := autostart.Enable(); err != nil {
 		return fmt.Errorf("注册开机自启失败: %w", err)
 	}
-	if err := install.StartMenu(); err != nil {
+	if err := install.StartMenu(recorded); err != nil {
 		return fmt.Errorf("创建开始菜单快捷方式失败: %w", err)
 	}
 	return nil
@@ -415,25 +514,66 @@ func registerStartup() error {
 func cmdUninstall(args []string) error {
 	fs := flag.NewFlagSet("uninstall", flag.ContinueOnError)
 	keepConfig := fs.Bool("keep-config", false, "保留配置与凭证")
+	confirmed := fs.Bool("confirmed", false, "已在上一进程确认过，不再询问")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	dir, _, err := install.Target()
+	cfg, err := store.Load()
 	if err != nil {
 		return err
 	}
-	steps := []string{"开机自启项", "开始菜单快捷方式", "程序目录 " + dir}
+	dir, _, err := install.Target(cfg.InstallDir)
+	if err != nil {
+		return err
+	}
+	// The install folder is deleted recursively, so it has to look like one of ours first —
+	// a stale or hand-edited record must not turn an uninstall into a format request.
+	present := install.LooksInstalled(dir)
+	steps := []string{"开机自启项", "开始菜单快捷方式"}
+	if present {
+		steps = append(steps, "程序目录 "+dir)
+	}
 	if !*keepConfig {
 		if cfgDir, err := store.Dir(); err == nil {
 			steps = append(steps, "配置与凭证 "+cfgDir)
 		}
 	}
-	if isInstalledBuild() && !notify.Confirm("卸载 MiMo Switch",
+	if isInstalledBuild() && !*confirmed && !notify.Confirm("卸载 MiMo Switch",
 		"将删除：\n  · "+strings.Join(steps, "\n  · ")+
 			"\n\n正在运行的本地端点会先退出。确定继续？") {
 		fmt.Println("已取消卸载。")
 		return nil
+	}
+
+	// A process cannot delete its own working directory, and double-clicking the uninstaller
+	// from inside the install folder makes that folder the working directory — which is how
+	// every file got removed while the folder itself stayed.
+	stepOutOfTarget()
+	if self, err := os.Executable(); err == nil && install.IsStaged(self) {
+		// The copy an uninstall runs from outlives its own delete call: only a process that is
+		// not this image can remove it.
+		if err := install.SweepAfterExit(self); err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+		}
+	}
+
+	// When the double-clicked uninstaller copy *is* the running image, it sits inside the very
+	// folder we are about to delete and Windows will not let that go. Continue from a copy in
+	// the temp directory and get out of the way; the copy does the deleting.
+	if !*confirmed && install.RunningFromTarget(dir) {
+		staged, err := install.RestageSelf()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n就地尝试删除。\n", err)
+		} else {
+			// The copy is the GUI build, so it needs no console of its own.
+			child := exec.Command(staged, append([]string{"uninstall", "-confirmed"}, args...)...)
+			if err := child.Start(); err != nil {
+				fmt.Fprintf(os.Stderr, "从临时副本继续卸载失败: %v\n", err)
+			} else {
+				return nil
+			}
+		}
 	}
 
 	stopRunningInstance()
@@ -443,6 +583,23 @@ func cmdUninstall(args []string) error {
 	if err := install.RemoveStartMenu(); err != nil {
 		fmt.Fprintf(os.Stderr, "删除快捷方式失败: %v\n", err)
 	}
+	// The install folder goes first, while the record still points at it: if anything survives,
+	// a retry must look at the same place rather than at the default folder.
+	folderNote := ""
+	switch foreign, err := install.OnlyOurs(dir); {
+	case !present:
+		folderNote = "没有找到已安装的程序目录，未删除任何文件夹。"
+		fmt.Printf("没有找到已安装的程序目录（%s），跳过删除。\n", dir)
+	case err == nil && len(foreign) > 0:
+		folderNote = "安装目录里还有其他文件，已保留:\n  " + dir + "\n请自行确认后删除。"
+		fmt.Printf("安装目录 %s 里还有 %d 个非本程序的文件，已保留，请自行删除。\n", dir, len(foreign))
+	default:
+		if err := removeDir(dir); err != nil {
+			folderNote = "安装目录没能删干净:\n  " + dir + "\n重启后再双击一次「卸载 MiMo Switch.exe」。"
+			fmt.Fprintf(os.Stderr, "删除程序目录失败: %v\n", err)
+		}
+	}
+
 	if !*keepConfig {
 		if cfgDir, err := store.Dir(); err == nil {
 			if err := os.RemoveAll(cfgDir); err != nil {
@@ -450,24 +607,53 @@ func cmdUninstall(args []string) error {
 			}
 		}
 	}
-	// The running image cannot be deleted, but it can be renamed: stashing it in the temp
-	// directory unlocks the folder so the delete happens right here, and the stashed file is
-	// swept on the next launch.
-	if install.RunningFromTarget(dir) {
-		if _, err := install.StashSelf(dir); err != nil {
-			fmt.Fprintf(os.Stderr, "%v\n", err)
-		}
-	}
-	if err := os.RemoveAll(dir); err != nil {
-		fmt.Fprintf(os.Stderr, "删除程序目录失败: %v\n", err)
-	} else {
-		fmt.Println("程序目录已删除。")
+	if folderNote == "" {
+		folderNote = "开机自启、快捷方式、安装目录和配置均已移除。"
 	}
 	fmt.Println("卸载完成。")
-	if isInstalledBuild() {
-		notify.Info("MiMo Switch 已卸载", "开机自启、快捷方式和配置均已移除。")
+	if isInstalledBuild() || *confirmed {
+		if strings.HasPrefix(folderNote, "安装目录没能") {
+			notify.Error("MiMo Switch 未能完全卸载", errors.New(folderNote))
+		} else {
+			notify.Info("MiMo Switch 已卸载", folderNote)
+		}
 	}
 	return nil
+}
+
+// stepOutOfTarget moves this process out of whatever directory it may be about to delete.
+func stepOutOfTarget() {
+	if err := os.Chdir(os.TempDir()); err != nil {
+		fmt.Fprintf(os.Stderr, "离开当前目录失败: %v\n", err)
+	}
+}
+
+// removeDir deletes the install folder, retrying for a few seconds: the process that restaged
+// itself exited only moments ago, and Defender can still be scanning the copy it made. An
+// Explorer window left inside the folder holds the directory node itself, which no amount of
+// retrying will free — once nothing is left in there the uninstall has done its job, so an
+// emptied folder counts as removed.
+func removeDir(dir string) error {
+	var lastErr error
+	for i := 0; i < 20; i++ {
+		if lastErr = os.RemoveAll(dir); lastErr == nil {
+			return nil
+		}
+		if dirEmpty(dir) {
+			fmt.Printf("安装目录已清空，空目录会在占用它的窗口关闭后消失。\n")
+			return nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return lastErr
+}
+
+func dirEmpty(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	return len(entries) == 0
 }
 
 // stopRunningInstance asks a live tray to exit before files disappear under it. Silence is
