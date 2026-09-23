@@ -12,7 +12,7 @@
 
 ## 下载
 
-从 [GitHub Releases](../../releases/latest) 下载 `mimo-switch-win-x64.zip`，解压后双击 `MiMoSwitch.exe`：
+目前仅支持 Windows 系统。从 [GitHub Releases](../../releases/latest) 下载 `mimo-switch-win-x64.zip`，解压后双击 `MiMoSwitch.exe`：
 
 1. 首次运行弹出目录选择框，选定安装位置（需当前用户可写，例如 `D:\MiMoSwitch`；系统目录会被拒绝）
 2. 安装完成后自动注册开机自启（可在面板关闭），托盘常驻，浏览器打开 `http://127.0.0.1:7864/`
