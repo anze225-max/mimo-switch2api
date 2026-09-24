@@ -1,8 +1,8 @@
 # MiMo Switch
 
-**MiMo Switch** —— 把 MiMo 桌面端的免费额度暴露成一个本地 **OpenAI 协议**端点的单文件 Windows 工具。
+**MiMo Switch** —— 把小米 MiMo 桌面端的免费额度暴露成一个本地 OpenAI / Anthropic / Responses 协议端点的单文件 Windows 工具，可以理解为 **MiMo 反代 / MiMo 中转**：不写一行代码，就把 MiMo 的额度接到 Claude Code、Codex、Cursor、Cline 等工具里。
 
-- **本地 OpenAI 协议端点** —— 包装成 `http://127.0.0.1:7864/v1`，任何支持 OpenAI 接口的工具（填 `OPENAI_BASE_URL` / `OPENAI_API_KEY` / `model`）都能直接用，支持图片输入
+- **三种协议都支持** —— OpenAI（`/v1/chat/completions`）、Anthropic（`/v1/messages`）、Responses（`/v1/responses`），包装成 `http://127.0.0.1:7864/v1`，填 `BASE_URL` / `API_KEY` / `model` 即可，支持图片输入
 - **工具内登录** —— 窗口里显示小米官方登录页，登录一次即可；凭据只存本机（DPAPI 加密），不经过任何第三方
 - **面板** —— 浏览器打开 `http://127.0.0.1:7864/` 查看状态、剩余额度、用量与接入配置
 - **单 exe 自安装** —— 双击运行选一次安装目录即可：开机静默自启、崩溃自动重启、保活续期均可配置
@@ -10,13 +10,22 @@
 
 > MiMo 不必安装或保持运行；额度、用量与倍率均来自上游返回的真实数据。
 
+支持的客户端（详见下方「接入工具」）：
+
+| 客户端 | 协议 | 配置要点 |
+| --- | --- | --- |
+| **Claude Code** | Anthropic | `ANTHROPIC_BASE_URL` + `ANTHROPIC_API_KEY` |
+| **Codex** | Responses | `~/.codex/config.toml` 加 `[model_providers.mimo]` |
+| **Cursor / Cline** | OpenAI | 填 `OPENAI_BASE_URL` + `OPENAI_API_KEY` |
+| 任何 OpenAI 兼容工具 | OpenAI | 同上 |
+
 ## 下载
 
 目前仅支持 Windows 系统。从 [GitHub Releases](../../releases/latest) 下载 `MiMoSwitch.exe`（就这一个文件）双击运行：
 
 1. 首次运行弹出目录选择框，选定安装位置（需当前用户可写，例如 `D:\MiMoSwitch`；系统目录会被拒绝）。程序会把自己安置进该目录，并在里面放好卸载程序与 `README.txt`，同时**自动移走你下载的那个 exe**——下载目录不会留下文件
 2. 安装完成后自动注册开机自启（可在面板关闭），托盘常驻，浏览器打开 `http://127.0.0.1:7864/`
-3. 面板「接入配置」给出三项：接口地址、API Key（本地令牌）、模型 —— 本端点使用 **OpenAI 协议**，填进任何支持 OpenAI 接口的工具即可
+3. 面板「接入配置」给出三项：接口地址、API Key（本地令牌）、模型 —— 填进任何支持 OpenAI / Anthropic 接口的工具即可
 
 ```env
 OPENAI_BASE_URL=http://127.0.0.1:7864/v1
@@ -39,7 +48,8 @@ mimo-switch.exe harvest --launch
 | 模块 | 说明 |
 | --- | --- |
 | OpenAI 协议端点 | `POST /v1/chat/completions`（流式与非流式、图片输入）、`GET /v1/models`、`GET /` 面板 |
-| Responses 协议端点 | `POST /v1/responses`，供 Codex 等使用 Responses API 的工具接入（见下节） |
+| Anthropic 协议端点 | `POST /v1/messages`，供 Claude Code 等使用 Anthropic 接口的工具接入 |
+| Responses 协议端点 | `POST /v1/responses`，供 Codex 等使用 Responses API 的工具接入 |
 | 工具内登录 | 弹窗显示小米官方登录页，OAuth 由用户本人完成；支持自动续期与保活 |
 | 会话采纳 | `harvest --launch` 从本机 MiMo 桌面端采纳已登录会话，无需重新登录 |
 | 面板 | 状态、额度来源、剩余额度、真实 token 用量统计、可用模型与倍率 |
@@ -47,9 +57,20 @@ mimo-switch.exe harvest --launch
 | 自安装 | 首次运行选择安装目录（记录后不再询问）；安装目录内自带卸载副本 |
 | 一键卸载 | 删自启项、快捷方式、安装目录、配置与凭证；目录里有陌生文件时会保留并提示 |
 
-## 接入 Codex
+## 接入工具
 
-Codex 走的是 OpenAI 的 **Responses** 协议，本端点已支持，包括 Codex 特有的两种工具下发方式
+三种协议共用同一个地址 `http://127.0.0.1:7864/v1` 和同一个本地令牌（面板里可复制）。
+
+### Claude Code（Anthropic 协议）
+
+```bash
+export ANTHROPIC_BASE_URL=http://127.0.0.1:7864/v1
+export ANTHROPIC_API_KEY=<面板里的本地令牌>
+```
+
+### Codex（Responses 协议）
+
+Codex 走 OpenAI 的 **Responses** 协议，本端点已支持，包括 Codex 特有的两种工具下发方式
 （普通 `tools` 字段，以及新版模型使用的 `additional_tools` / `namespace` 布局与自由格式工具）。
 在 `~/.codex/config.toml` 里加：
 
@@ -66,6 +87,16 @@ experimental_bearer_token = "<面板里的本地令牌>"
 
 排查工具相关问题时可设 `MIMO_DEBUG_TOOLS=1` 启动，会打印每次请求的工具布局与最终提供给模型的
 工具列表。
+
+### Cursor / Cline / 其他 OpenAI 兼容工具（OpenAI 协议）
+
+```env
+OPENAI_BASE_URL=http://127.0.0.1:7864/v1
+OPENAI_API_KEY=<面板里的本地令牌>
+model=mimo-v2.6-flash
+```
+
+模型建议填 `mimo-v2.6-flash`（0.4 倍最省），面板的模型表会标出最省的那个。
 
 ## 自行构建
 
